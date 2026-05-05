@@ -1,0 +1,409 @@
+import SwiftUI
+
+struct MacHostView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 280, ideal: 340)
+        } detail: {
+            previewPane
+        }
+        .task {
+            hostModel.refreshAll()
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Apperture")
+                            .font(.title2.weight(.semibold))
+                        Text("Mac Host")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        hostModel.refreshAll()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh")
+                }
+
+                PermissionSummaryView()
+                FrameServerSummaryView()
+            }
+            .padding(20)
+
+            Divider()
+
+            List(hostModel.windows, selection: $hostModel.selectedWindowID) { window in
+                WindowRow(window: window)
+                    .tag(window.id)
+            }
+            .listStyle(.sidebar)
+        }
+    }
+
+    private var previewPane: some View {
+        VStack(spacing: 0) {
+            HostToolbarView()
+
+            Divider()
+
+            GeometryReader { proxy in
+                ZStack {
+                    Color(nsColor: .windowBackgroundColor)
+
+                    VStack(spacing: 20) {
+                        CapturePreviewView(
+                            image: hostModel.liveFrame,
+                            selectedWindow: hostModel.selectedWindow,
+                            availableSize: proxy.size
+                        )
+
+                        StatusStripView(status: hostModel.streamStatus)
+                    }
+                    .padding(24)
+                }
+            }
+        }
+    }
+}
+
+private struct PermissionSummaryView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        VStack(spacing: 8) {
+            PermissionRow(
+                title: "Screen Recording",
+                isGranted: hostModel.permissions.screenCaptureGranted,
+                actionTitle: hostModel.permissions.screenCaptureGranted ? "Open" : "Allow",
+                action: {
+                    if hostModel.permissions.screenCaptureGranted {
+                        hostModel.openScreenRecordingSettings()
+                    } else {
+                        hostModel.requestScreenCaptureAccess()
+                    }
+                }
+            )
+
+            PermissionRow(
+                title: "Accessibility",
+                isGranted: hostModel.permissions.accessibilityGranted,
+                actionTitle: "Open",
+                action: hostModel.openAccessibilitySettings
+            )
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+}
+
+private struct FrameServerSummaryView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: symbolName)
+                    .foregroundStyle(symbolColor)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hostModel.frameServerStatus.title)
+                        .font(.system(size: 13, weight: .medium))
+                    Text(hostModel.frameServerStatus.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+
+            if shouldShowConnectionHints {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Connect from iPhone")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    if hostModel.connectionHints.isEmpty {
+                        Text("No network address detected.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(hostModel.connectionHints) { hint in
+                            ConnectionHintRow(hint: hint)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var symbolName: String {
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return "antenna.radiowaves.left.and.right.slash"
+        case .online:
+            return "antenna.radiowaves.left.and.right"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var symbolColor: Color {
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return .secondary
+        case .online:
+            return .green
+        case .failed:
+            return .orange
+        }
+    }
+
+    private var shouldShowConnectionHints: Bool {
+        switch hostModel.frameServerStatus {
+        case .online:
+            return true
+        case .offline, .failed:
+            return false
+        }
+    }
+}
+
+private struct ConnectionHintRow: View {
+    @EnvironmentObject private var hostModel: HostModel
+    var hint: HostConnectionHint
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: hint.symbolName)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(hint.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(hint.endpointText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                hostModel.copyConnectionHint(hint)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy \(hint.endpointText)")
+        }
+    }
+}
+
+private struct PermissionRow: View {
+    var title: String
+    var isGranted: Bool
+    var actionTitle: String
+    var action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isGranted ? "checkmark.circle.fill" : "exclamationmark.circle")
+                .foregroundStyle(isGranted ? .green : .orange)
+                .frame(width: 20)
+
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+
+            Spacer()
+
+            Button(actionTitle, action: action)
+                .buttonStyle(.link)
+        }
+    }
+}
+
+private struct WindowRow: View {
+    var window: MirrorWindow
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: window.targetKind.symbolName)
+                .foregroundStyle(window.isLikelySimulator ? .blue : .secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(window.displayTitle)
+                    .lineLimit(1)
+
+                Text(window.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct HostToolbarView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(hostModel.selectedWindow?.displayTitle ?? "No Window Selected")
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+
+                Text(hostModel.selectedWindow?.subtitle ?? "Waiting for target selection.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                if hostModel.streamStatus.isRunning {
+                    hostModel.stopLiveView()
+                } else {
+                    hostModel.startLiveView()
+                }
+            } label: {
+                Label(
+                    hostModel.streamStatus.isRunning ? "Stop Live View" : "Start Live View",
+                    systemImage: hostModel.streamStatus.isRunning ? "stop.circle" : "play.circle"
+                )
+            }
+            .disabled(hostModel.selectedWindow == nil)
+            .keyboardShortcut(.return, modifiers: .command)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+}
+
+private struct CapturePreviewView: View {
+    var image: CGImage?
+    var selectedWindow: MirrorWindow?
+    var availableSize: CGSize
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .textBackgroundColor))
+
+            if let image {
+                Image(decorative: image, scale: 1, orientation: .up)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(.rect(cornerRadius: 8))
+                    .padding(16)
+            } else {
+                EmptyPreviewView(selectedWindow: selectedWindow)
+                    .padding(24)
+            }
+        }
+        .frame(maxWidth: availableSize.width, maxHeight: availableSize.height)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        }
+    }
+}
+
+private struct EmptyPreviewView: View {
+    var selectedWindow: MirrorWindow?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: selectedWindow == nil ? "macwindow.badge.plus" : "camera.viewfinder")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 4) {
+                Text(selectedWindow == nil ? "No Target Selected" : "Live View Idle")
+                    .font(.title3.weight(.semibold))
+
+                Text(selectedWindow == nil ? "Window preview unavailable." : "Live stream unavailable.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: 360)
+    }
+}
+
+private struct StatusStripView: View {
+    var status: LiveStreamStatus
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbolName)
+                .foregroundStyle(symbolColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(status.detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var symbolName: String {
+        switch status {
+        case .idle:
+            return "viewfinder"
+        case .starting:
+            return "dot.radiowaves.left.and.right"
+        case .live:
+            return "checkmark.circle.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var symbolColor: Color {
+        switch status {
+        case .idle:
+            return .secondary
+        case .starting:
+            return .blue
+        case .live:
+            return .green
+        case .failed:
+            return .orange
+        }
+    }
+}

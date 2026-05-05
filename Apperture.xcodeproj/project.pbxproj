@@ -1,0 +1,505 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		028918B96A8DC43FE1684EBA /* MirrorLayoutMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */; };
+		068AD539B99E8C19A2D11B2A /* RemoteControlMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */; };
+		0EECB8D0A7CC8B659DBD5183 /* MacHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118635A423B2D5C671F2B700 /* MacHostView.swift */; };
+		21660F004A1BA9156F2BE9E3 /* AppertureiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */; };
+		5C78E0DCD1D9DDBA4E705DC9 /* RemoteInputInjectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */; };
+		5FFC5101E2CD8373594A9057 /* WindowDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */; };
+		70D2E1A265E6D795EA7FE7B8 /* RemoteFrameStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */; };
+		7A7B12810B14781803D8876C /* AppertureMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */; };
+		8419D125F186B9A4F248261E /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 795A9206A21C46C0BAB65DD0 /* Media.xcassets */; };
+		8F4FF7F80754112B14E8F408 /* MirrorLayoutMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */; };
+		99E7F78DBB29EADCEE166271 /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5F1ED9318D52100E54E845C7 /* Media.xcassets */; };
+		99F1158CE409E8521035C331 /* HostSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D8DDB4253648C11A1B14A6 /* HostSettingsView.swift */; };
+		9B546A58AA6C8B6B41CAC26C /* HostModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E0E7F447051F528EC83AC40 /* HostModel.swift */; };
+		A2CBB3C89B37215BB4A65309 /* HostNetworkAddressService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F470AEC064A0CCFDF394F /* HostNetworkAddressService.swift */; };
+		A4C0DA92459830E4923D0677 /* MirrorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953184A086EFB331049EC963 /* MirrorWindow.swift */; };
+		B1C57516BAB73E0F747413BD /* MirrorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953184A086EFB331049EC963 /* MirrorWindow.swift */; };
+		C601E3534637B847F12029C2 /* RemoteControlMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */; };
+		CD8E3761A35AAB8B1D901349 /* DesktopWallpaperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECCC377F19F512CCBDE2F480 /* DesktopWallpaperService.swift */; };
+		D2A26E681AA66920122C6BE6 /* RemoteFrameStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */; };
+		DA6A7B27549F8FBE4F4E1795 /* RemoteFrameStreamServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D290053A2250C9371C1A6F37 /* RemoteFrameStreamServer.swift */; };
+		DABCACF858D6651EC0C8E411 /* MirrorSessionSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */; };
+		E00CE58127D97834B26BDEB3 /* RemoteWindowListMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */; };
+		EC29B8260AF745E27852E070 /* RemoteFrameStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */; };
+		F2C005D75782C5D523490314 /* MirrorSessionSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */; };
+		F5F4C944E94E885BB03C61B7 /* iPhoneViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE8B97426ABA7CF9C8CF0E32 /* iPhoneViewerView.swift */; };
+		F6F0AED2BF2D7E55BAC82430 /* LiveWindowCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8052876D99CA9AD7C14A57A /* LiveWindowCaptureService.swift */; };
+		FE7C80B64BD4D911AA1BDC3C /* RemoteWindowListMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0B6711FED776A49487016D25 /* AppertureMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppertureMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		118635A423B2D5C671F2B700 /* MacHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHostView.swift; sourceTree = "<group>"; };
+		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AppertureiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorLayoutMode.swift; sourceTree = "<group>"; };
+		29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWindowListMessage.swift; sourceTree = "<group>"; };
+		5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryService.swift; sourceTree = "<group>"; };
+		5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppertureMacApp.swift; sourceTree = "<group>"; };
+		5F1ED9318D52100E54E845C7 /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
+		795A9206A21C46C0BAB65DD0 /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
+		79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlMessage.swift; sourceTree = "<group>"; };
+		7A7DC6BCB06273CCD7B1C452 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorSessionSnapshot.swift; sourceTree = "<group>"; };
+		8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamConfiguration.swift; sourceTree = "<group>"; };
+		9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamClient.swift; sourceTree = "<group>"; };
+		953184A086EFB331049EC963 /* MirrorWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorWindow.swift; sourceTree = "<group>"; };
+		9E0E7F447051F528EC83AC40 /* HostModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostModel.swift; sourceTree = "<group>"; };
+		A8052876D99CA9AD7C14A57A /* LiveWindowCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveWindowCaptureService.swift; sourceTree = "<group>"; };
+		B2ACE7CFE2F054F50016FC7B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppertureiOSApp.swift; sourceTree = "<group>"; };
+		CD0F470AEC064A0CCFDF394F /* HostNetworkAddressService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostNetworkAddressService.swift; sourceTree = "<group>"; };
+		CE8B97426ABA7CF9C8CF0E32 /* iPhoneViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPhoneViewerView.swift; sourceTree = "<group>"; };
+		D290053A2250C9371C1A6F37 /* RemoteFrameStreamServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamServer.swift; sourceTree = "<group>"; };
+		D3D8DDB4253648C11A1B14A6 /* HostSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettingsView.swift; sourceTree = "<group>"; };
+		ECCC377F19F512CCBDE2F480 /* DesktopWallpaperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWallpaperService.swift; sourceTree = "<group>"; };
+		EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteInputInjectionService.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		10A5B8C4242E6016A1EC354A /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */,
+				B2ACE7CFE2F054F50016FC7B /* Info.plist */,
+				CE8B97426ABA7CF9C8CF0E32 /* iPhoneViewerView.swift */,
+				5F1ED9318D52100E54E845C7 /* Media.xcassets */,
+				9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */,
+			);
+			name = iOS;
+			path = Sources/iOS;
+			sourceTree = "<group>";
+		};
+		6F842C65753AD273565151DF /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */,
+				8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */,
+				953184A086EFB331049EC963 /* MirrorWindow.swift */,
+				79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */,
+				8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */,
+				29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */,
+			);
+			name = Shared;
+			path = Sources/Shared;
+			sourceTree = "<group>";
+		};
+		C3C857E9638C2E26E0AB9A01 = {
+			isa = PBXGroup;
+			children = (
+				10A5B8C4242E6016A1EC354A /* iOS */,
+				F428736D4C46B143F4DCACEB /* Mac */,
+				6F842C65753AD273565151DF /* Shared */,
+				FA9380E0A4A72C50FC2A7B5E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F428736D4C46B143F4DCACEB /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */,
+				ECCC377F19F512CCBDE2F480 /* DesktopWallpaperService.swift */,
+				9E0E7F447051F528EC83AC40 /* HostModel.swift */,
+				CD0F470AEC064A0CCFDF394F /* HostNetworkAddressService.swift */,
+				D3D8DDB4253648C11A1B14A6 /* HostSettingsView.swift */,
+				7A7DC6BCB06273CCD7B1C452 /* Info.plist */,
+				A8052876D99CA9AD7C14A57A /* LiveWindowCaptureService.swift */,
+				118635A423B2D5C671F2B700 /* MacHostView.swift */,
+				795A9206A21C46C0BAB65DD0 /* Media.xcassets */,
+				D290053A2250C9371C1A6F37 /* RemoteFrameStreamServer.swift */,
+				EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */,
+				5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */,
+			);
+			name = Mac;
+			path = Sources/Mac;
+			sourceTree = "<group>";
+		};
+		FA9380E0A4A72C50FC2A7B5E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				12FEF13A3B652BE2B76966DC /* AppertureiOS.app */,
+				0B6711FED776A49487016D25 /* AppertureMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		64E6BA233DDDEE1F52D06830 /* AppertureMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 055A3AA29DA844638A6CF893 /* Build configuration list for PBXNativeTarget "AppertureMac" */;
+			buildPhases = (
+				B134AB40A711BCE396205FD8 /* Sources */,
+				F33B0D29D386C55AF8E67EAE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppertureMac;
+			productName = AppertureMac;
+			productReference = 0B6711FED776A49487016D25 /* AppertureMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F448AFB6AB53675783F36AD5 /* AppertureiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E807791E1604CBE90A04E694 /* Build configuration list for PBXNativeTarget "AppertureiOS" */;
+			buildPhases = (
+				166577E3593751DD601FF691 /* Sources */,
+				DC140C6E1504F9A1561D6059 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppertureiOS;
+			productName = AppertureiOS;
+			productReference = 12FEF13A3B652BE2B76966DC /* AppertureiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5C43EA316E1A26B6D9016CBC /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					64E6BA233DDDEE1F52D06830 = {
+						DevelopmentTeam = VY76D5S364;
+						ProvisioningStyle = Automatic;
+					};
+					F448AFB6AB53675783F36AD5 = {
+						DevelopmentTeam = VY76D5S364;
+					};
+				};
+			};
+			buildConfigurationList = C807269580C3DDC90780C355 /* Build configuration list for PBXProject "Apperture" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C3C857E9638C2E26E0AB9A01;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				64E6BA233DDDEE1F52D06830 /* AppertureMac */,
+				F448AFB6AB53675783F36AD5 /* AppertureiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DC140C6E1504F9A1561D6059 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				99E7F78DBB29EADCEE166271 /* Media.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F33B0D29D386C55AF8E67EAE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8419D125F186B9A4F248261E /* Media.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		166577E3593751DD601FF691 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				21660F004A1BA9156F2BE9E3 /* AppertureiOSApp.swift in Sources */,
+				8F4FF7F80754112B14E8F408 /* MirrorLayoutMode.swift in Sources */,
+				DABCACF858D6651EC0C8E411 /* MirrorSessionSnapshot.swift in Sources */,
+				A4C0DA92459830E4923D0677 /* MirrorWindow.swift in Sources */,
+				C601E3534637B847F12029C2 /* RemoteControlMessage.swift in Sources */,
+				70D2E1A265E6D795EA7FE7B8 /* RemoteFrameStreamClient.swift in Sources */,
+				D2A26E681AA66920122C6BE6 /* RemoteFrameStreamConfiguration.swift in Sources */,
+				E00CE58127D97834B26BDEB3 /* RemoteWindowListMessage.swift in Sources */,
+				F5F4C944E94E885BB03C61B7 /* iPhoneViewerView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B134AB40A711BCE396205FD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A7B12810B14781803D8876C /* AppertureMacApp.swift in Sources */,
+				CD8E3761A35AAB8B1D901349 /* DesktopWallpaperService.swift in Sources */,
+				9B546A58AA6C8B6B41CAC26C /* HostModel.swift in Sources */,
+				A2CBB3C89B37215BB4A65309 /* HostNetworkAddressService.swift in Sources */,
+				99F1158CE409E8521035C331 /* HostSettingsView.swift in Sources */,
+				F6F0AED2BF2D7E55BAC82430 /* LiveWindowCaptureService.swift in Sources */,
+				0EECB8D0A7CC8B659DBD5183 /* MacHostView.swift in Sources */,
+				028918B96A8DC43FE1684EBA /* MirrorLayoutMode.swift in Sources */,
+				F2C005D75782C5D523490314 /* MirrorSessionSnapshot.swift in Sources */,
+				B1C57516BAB73E0F747413BD /* MirrorWindow.swift in Sources */,
+				068AD539B99E8C19A2D11B2A /* RemoteControlMessage.swift in Sources */,
+				EC29B8260AF745E27852E070 /* RemoteFrameStreamConfiguration.swift in Sources */,
+				DA6A7B27549F8FBE4F4E1795 /* RemoteFrameStreamServer.swift in Sources */,
+				5C78E0DCD1D9DDBA4E705DC9 /* RemoteInputInjectionService.swift in Sources */,
+				FE7C80B64BD4D911AA1BDC3C /* RemoteWindowListMessage.swift in Sources */,
+				5FFC5101E2CD8373594A9057 /* WindowDiscoveryService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2C1744DDB977981DB2DC8C28 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		2DBDE08CA935855EB9A2A8E7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "Apperture-AppIcon";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = VY76D5S364;
+				INFOPLIST_FILE = Sources/iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture;
+				PRODUCT_NAME = Apperture;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		4912F6F1DA3B3DC937A91DD9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = VY76D5S364;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Sources/Mac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture.mac;
+				PRODUCT_NAME = Apperture;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		68324E6F5A1B339CD1684E6F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "Apperture-AppIcon";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = VY76D5S364;
+				INFOPLIST_FILE = Sources/iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture;
+				PRODUCT_NAME = Apperture;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E9E6B72FD9C8B3357B80493A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F9C0E5A8F3C0F75ABB30A667 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = VY76D5S364;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Sources/Mac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture.mac;
+				PRODUCT_NAME = Apperture;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		055A3AA29DA844638A6CF893 /* Build configuration list for PBXNativeTarget "AppertureMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F9C0E5A8F3C0F75ABB30A667 /* Debug */,
+				4912F6F1DA3B3DC937A91DD9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C807269580C3DDC90780C355 /* Build configuration list for PBXProject "Apperture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E9E6B72FD9C8B3357B80493A /* Debug */,
+				2C1744DDB977981DB2DC8C28 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E807791E1604CBE90A04E694 /* Build configuration list for PBXNativeTarget "AppertureiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				68324E6F5A1B339CD1684E6F /* Debug */,
+				2DBDE08CA935855EB9A2A8E7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5C43EA316E1A26B6D9016CBC /* Project object */;
+}
