@@ -17,9 +17,20 @@ struct RemoteStreamDiagnosticsMessage: Codable, Equatable {
     var sentFPS: Double
     var bitrateMbps: Double
     var configuredBitrateMbps: Double
+    var targetFPS: Double
+    var videoQuality: Double
     var droppedFrames: Int
+    var backpressureKeyFrames: Int
     var keyFrameInterval: Int
     var codec: String
+    var capturePrepMS: Double
+    var cgImageMS: Double
+    var cropMS: Double
+    var materializeMS: Double
+    var pixelBufferMS: Double
+    var encodeMS: Double
+    var encoderQueueMS: Double
+    var directFramePercent: Double
 }
 
 struct RemoteVideoFrameMessage: Codable, Equatable {

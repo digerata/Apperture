@@ -2,6 +2,27 @@ import AVFoundation
 import Combine
 import UIKit
 
+private final class PaddedLabel: UILabel {
+    var contentInsets = UIEdgeInsets.zero {
+        didSet {
+            invalidateIntrinsicContentSize()
+            setNeedsDisplay()
+        }
+    }
+
+    override func drawText(in rect: CGRect) {
+        super.drawText(in: rect.inset(by: contentInsets))
+    }
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(
+            width: size.width + contentInsets.left + contentInsets.right,
+            height: size.height + contentInsets.top + contentInsets.bottom
+        )
+    }
+}
+
 final class iPhoneViewerViewController: UIViewController {
     private let streamClient = RemoteFrameStreamClient()
     private var cancellables = Set<AnyCancellable>()
@@ -12,7 +33,7 @@ final class iPhoneViewerViewController: UIViewController {
     private let mirrorCanvasView = MirrorCanvasView()
     private let toolbarView = ViewerToolbarView()
     private let keyboardInputView = KeyboardInputView()
-    private let fpsOverlayLabel = UILabel()
+    private let fpsOverlayLabel = PaddedLabel()
     private var currentDefaultLayoutMode: MirrorLayoutMode?
     private var mirrorLeadingConstraint: NSLayoutConstraint?
     private var mirrorTrailingConstraint: NSLayoutConstraint?
@@ -21,6 +42,13 @@ final class iPhoneViewerViewController: UIViewController {
     private var frameTimestamps: [CFTimeInterval] = []
     private var displayedFPS: Double?
     private var latestStreamDiagnostics: RemoteStreamDiagnosticsMessage?
+    private var isVideoDebugEnabled = UserDefaults.standard.bool(forKey: "VideoDebugOverlayEnabled") {
+        didSet {
+            UserDefaults.standard.set(isVideoDebugEnabled, forKey: "VideoDebugOverlayEnabled")
+            toolbarView.isVideoDebugEnabled = isVideoDebugEnabled
+            updateFrameRateOverlay()
+        }
+    }
 
     private var isKeyboardPresented = false {
         didSet {
@@ -67,6 +95,7 @@ final class iPhoneViewerViewController: UIViewController {
         mirrorCanvasView.layoutMode = .fitHeight
 
         toolbarView.translatesAutoresizingMaskIntoConstraints = false
+        toolbarView.isVideoDebugEnabled = isVideoDebugEnabled
 
         keyboardInputView.translatesAutoresizingMaskIntoConstraints = false
         keyboardInputView.alpha = 0.01
@@ -78,6 +107,7 @@ final class iPhoneViewerViewController: UIViewController {
         fpsOverlayLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         fpsOverlayLabel.textAlignment = .left
         fpsOverlayLabel.numberOfLines = 0
+        fpsOverlayLabel.contentInsets = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         fpsOverlayLabel.layer.cornerRadius = 7
         fpsOverlayLabel.layer.cornerCurve = .continuous
         fpsOverlayLabel.clipsToBounds = true
@@ -124,7 +154,7 @@ final class iPhoneViewerViewController: UIViewController {
             fpsOverlayLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             fpsOverlayLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
             fpsOverlayLabel.widthAnchor.constraint(equalToConstant: 176),
-            fpsOverlayLabel.heightAnchor.constraint(equalToConstant: 84),
+            fpsOverlayLabel.heightAnchor.constraint(equalToConstant: 120),
 
             keyboardInputView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             keyboardInputView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -136,6 +166,9 @@ final class iPhoneViewerViewController: UIViewController {
     private func configureCallbacks() {
         mirrorCanvasView.onPointerEvent = { [weak self] kind, point in
             self?.sendPointerEvent(kind: kind, point: point)
+        }
+        mirrorCanvasView.onScrollEvent = { [weak self] point, delta in
+            self?.sendScrollEvent(point: point, delta: delta)
         }
 
         toolbarView.onLayoutModeChanged = { [weak self] layoutMode in
@@ -165,6 +198,11 @@ final class iPhoneViewerViewController: UIViewController {
 
         toolbarView.onDiagnosticsTapped = { [weak self] in
             self?.presentConnectionDiagnostics()
+        }
+
+        toolbarView.onVideoDebugToggled = { [weak self] in
+            guard let self else { return }
+            isVideoDebugEnabled.toggle()
         }
 
         toolbarView.onExitTapped = { [weak self] in
@@ -202,6 +240,8 @@ final class iPhoneViewerViewController: UIViewController {
                 guard let self else { return }
                 if mirrorCanvasView.enqueueVideoSampleBuffer(sampleBuffer) {
                     recordDisplayedFrame()
+                } else {
+                    streamClient.requestKeyFrameIfNeeded()
                 }
             }
             .store(in: &cancellables)
@@ -236,6 +276,7 @@ final class iPhoneViewerViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] windows in
                 self?.toolbarView.windows = windows
+                self?.mirrorCanvasView.usesTouchDragForSingleFingerPan = windows.first(where: \.isSelected)?.isSimulator == true
             }
             .store(in: &cancellables)
 
@@ -262,6 +303,17 @@ final class iPhoneViewerViewController: UIViewController {
                 kind: kind,
                 normalizedX: Double(point.x),
                 normalizedY: Double(point.y),
+                sequenceNumber: nextSequenceNumber
+            )
+        )
+    }
+
+    private func sendScrollEvent(point: CGPoint, delta: CGPoint) {
+        nextSequenceNumber += 1
+        streamClient.send(
+            RemoteControlMessage(
+                scrollAt: point,
+                delta: delta,
                 sequenceNumber: nextSequenceNumber
             )
         )
@@ -326,6 +378,11 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func updateFrameRateOverlay() {
+        guard isVideoDebugEnabled else {
+            fpsOverlayLabel.isHidden = true
+            return
+        }
+
         guard displayedFPS != nil || latestStreamDiagnostics != nil else {
             fpsOverlayLabel.text = "FPS --"
             fpsOverlayLabel.isHidden = false
@@ -340,17 +397,28 @@ final class iPhoneViewerViewController: UIViewController {
         }
 
         fpsOverlayLabel.text = String(
-            format: "Render %@ fps\nCap %.1f Enc %.1f Send %.1f\n%d x %d  %.1f/%.1f Mbps\nDrop %d  KF %d",
+            format: "Render %@ fps\nCap %.1f Enc %.1f Send %.1f Target %.0f\n%d x %d  %.1f/%.1f Mbps Q %.2f\nDrop %d  RKF %d  KF %d\nPrep %.1f CG %.1f Crop %.1f Mat %.1f\nPB %.1f Enc %.1f Q %.1f Dir %.0f%%",
             displayFPS,
             diagnostics.captureFPS,
             diagnostics.encodedFPS,
             diagnostics.sentFPS,
+            diagnostics.targetFPS,
             diagnostics.encodedWidth,
             diagnostics.encodedHeight,
             diagnostics.bitrateMbps,
             diagnostics.configuredBitrateMbps,
+            diagnostics.videoQuality,
             diagnostics.droppedFrames,
-            diagnostics.keyFrameInterval
+            diagnostics.backpressureKeyFrames,
+            diagnostics.keyFrameInterval,
+            diagnostics.capturePrepMS,
+            diagnostics.cgImageMS,
+            diagnostics.cropMS,
+            diagnostics.materializeMS,
+            diagnostics.pixelBufferMS,
+            diagnostics.encodeMS,
+            diagnostics.encoderQueueMS,
+            diagnostics.directFramePercent
         )
         fpsOverlayLabel.isHidden = false
     }
@@ -458,6 +526,7 @@ private final class ViewerToolbarView: UIView {
     var onManualConnectTapped: () -> Void = {}
     var onForgetManualEndpointTapped: () -> Void = {}
     var onDiagnosticsTapped: () -> Void = {}
+    var onVideoDebugToggled: () -> Void = {}
     var onRequestWindowList: () -> Void = {}
     var onWindowSelected: (RemoteWindowSummary) -> Void = { _ in }
     var onLayoutModeChanged: (MirrorLayoutMode) -> Void = { _ in }
@@ -474,6 +543,12 @@ private final class ViewerToolbarView: UIView {
     }
 
     private var layoutMode: MirrorLayoutMode = .fitHeight
+    var isVideoDebugEnabled = false {
+        didSet {
+            guard isVideoDebugEnabled != oldValue else { return }
+            updateSettingsMenu()
+        }
+    }
     private let exitButton = ViewerToolbarView.makeButton(systemName: "rectangle.portrait.and.arrow.right")
     private let keyboardButton = ViewerToolbarView.makeButton(systemName: "keyboard")
     private let settingsButton = ViewerToolbarView.makeButton(systemName: "gearshape")
@@ -580,6 +655,11 @@ private final class ViewerToolbarView: UIView {
                     children: layoutMenuActions()
                 ),
                 UIMenu(
+                    title: "Debug",
+                    options: .displayInline,
+                    children: debugMenuActions()
+                ),
+                UIMenu(
                     title: "Connection",
                     options: .displayInline,
                     children: settingsConnectionActions()
@@ -600,6 +680,18 @@ private final class ViewerToolbarView: UIView {
                 onLayoutModeChanged(mode)
             }
         }
+    }
+
+    private func debugMenuActions() -> [UIMenuElement] {
+        [
+            UIAction(
+                title: "Video Debug",
+                image: UIImage(systemName: "chart.line.uptrend.xyaxis"),
+                state: isVideoDebugEnabled ? .on : .off
+            ) { [weak self] _ in
+                self?.onVideoDebugToggled()
+            }
+        ]
     }
 
     private func settingsConnectionActions() -> [UIMenuElement] {
@@ -684,16 +776,34 @@ private final class ViewerToolbarView: UIView {
             return [refreshAction]
         }
 
-        return [refreshAction] + selectableWindows.map { window in
-            UIAction(
-                title: window.title,
-                subtitle: window.subtitle,
-                image: UIImage(systemName: window.isSimulator ? "iphone.gen3" : "macwindow"),
-                state: window.isSelected ? .on : .off
-            ) { [weak self] _ in
-                guard let self else { return }
-                onWindowSelected(window)
+        return [refreshAction] + RemoteApplicationWindowGroup.make(from: selectableWindows).map { group -> UIMenuElement in
+            if group.windows.count == 1, let window = group.windows.first {
+                return UIAction(
+                    title: group.name,
+                    subtitle: window.subtitle,
+                    image: group.iconImage ?? group.fallbackImage,
+                    state: window.isSelected ? .on : .off
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    onWindowSelected(window)
+                }
             }
+
+            return UIMenu(
+                title: group.name,
+                image: group.iconImage ?? group.fallbackImage,
+                children: group.windows.map { window in
+                    UIAction(
+                        title: window.title,
+                        subtitle: window.subtitle,
+                        image: UIImage(systemName: window.isSimulator ? "iphone.gen3" : "macwindow"),
+                        state: window.isSelected ? .on : .off
+                    ) { [weak self] _ in
+                        guard let self else { return }
+                        onWindowSelected(window)
+                    }
+                }
+            )
         }
     }
 
@@ -752,6 +862,50 @@ private final class ViewerToolbarView: UIView {
     }
 }
 
+private struct RemoteApplicationWindowGroup {
+    var id: String
+    var name: String
+    var iconPNGData: Data?
+    var windows: [RemoteWindowSummary]
+
+    var containsSimulator: Bool {
+        windows.contains(where: \.isSimulator)
+    }
+
+    var iconImage: UIImage? {
+        guard let iconPNGData else { return nil }
+        return UIImage(data: iconPNGData)
+    }
+
+    var fallbackImage: UIImage? {
+        UIImage(systemName: containsSimulator ? "iphone.gen3" : "app.fill")
+    }
+
+    static func make(from windows: [RemoteWindowSummary]) -> [RemoteApplicationWindowGroup] {
+        Dictionary(grouping: windows) { $0.appGroupID }
+            .values
+            .map { windows in
+                let sortedWindows = windows.sorted { lhs, rhs in
+                    lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                let firstWindow = sortedWindows[0]
+                return RemoteApplicationWindowGroup(
+                    id: firstWindow.appGroupID,
+                    name: firstWindow.displayAppName,
+                    iconPNGData: sortedWindows.first(where: { $0.appIconPNGData != nil })?.appIconPNGData,
+                    windows: sortedWindows
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.containsSimulator != rhs.containsSimulator {
+                    return lhs.containsSimulator
+                }
+
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+}
+
 private final class MirrorCanvasView: UIView {
     var image: UIImage? {
         didSet {
@@ -797,8 +951,14 @@ private final class MirrorCanvasView: UIView {
             updateScrollableContent(resetOffsetIfNeeded: true)
         }
     }
+    var usesTouchDragForSingleFingerPan = false {
+        didSet {
+            pointerSurfaceView.usesTouchDragForSingleFingerPan = usesTouchDragForSingleFingerPan
+        }
+    }
 
     var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
+    var onScrollEvent: (CGPoint, CGPoint) -> Void = { _, _ in }
 
     private let scrollView = TwoFingerScrollView()
     private let contentView = UIView()
@@ -858,6 +1018,9 @@ private final class MirrorCanvasView: UIView {
 
         pointerSurfaceView.onPointerEvent = { [weak self] kind, point in
             self?.onPointerEvent(kind, point)
+        }
+        pointerSurfaceView.onScrollEvent = { [weak self] point, delta in
+            self?.onScrollEvent(point, delta)
         }
 
         placeholderView.isUserInteractionEnabled = false
@@ -1121,10 +1284,6 @@ private final class VideoRenderView: UIView {
             displayLayer.flushAndRemoveImage()
         }
 
-        if !displayLayer.isReadyForMoreMediaData {
-            displayLayer.flush()
-        }
-
         guard displayLayer.isReadyForMoreMediaData else { return false }
         displayLayer.enqueue(sampleBuffer)
         return true
@@ -1137,9 +1296,29 @@ private final class VideoRenderView: UIView {
 
 private final class PointerSurfaceView: UIView {
     var imageFrame: CGRect?
+    var usesTouchDragForSingleFingerPan = false
     var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
+    var onScrollEvent: (CGPoint, CGPoint) -> Void = { _, _ in }
 
+    private enum PointerIntent {
+        case idle
+        case pendingTap
+        case scrolling
+        case dragging
+    }
+
+    private let dragStartThreshold: CGFloat = 7
+    private let holdDownDelay: TimeInterval = 0.32
+    private var pointerIntent: PointerIntent = .idle
+    private var initialTouchLocation: CGPoint?
+    private var initialPointerPoint: CGPoint?
+    private var lastTouchLocation: CGPoint?
+    private var lastTouchTimestamp: TimeInterval?
+    private var lastScrollVelocity = CGPoint.zero
+    private var lastScrollPoint: CGPoint?
     private var lastPointerPoint: CGPoint?
+    private var holdDownWorkItem: DispatchWorkItem?
+    private var momentumGeneration = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1153,42 +1332,94 @@ private final class PointerSurfaceView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard activeTouches(from: event, fallback: touches).count == 1,
+        stopScrollMomentum()
+        let activeTouches = activeTouches(from: event, fallback: touches)
+        guard activeTouches.count == 1,
               let touch = touches.first,
               let point = normalizedPoint(for: touch.location(in: self), allowsClamping: false) else {
+            cancelPointerIfNeeded()
             return
         }
 
+        let location = touch.location(in: self)
+        pointerIntent = .pendingTap
+        initialTouchLocation = location
+        lastTouchLocation = location
+        lastTouchTimestamp = touch.timestamp
+        initialPointerPoint = point
         lastPointerPoint = point
-        onPointerEvent(.pointerDown, point)
+        lastScrollPoint = point
+        lastScrollVelocity = .zero
+        scheduleHoldDown(at: point)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard activeTouches(from: event, fallback: touches).count == 1,
-              let touch = touches.first,
-              let point = normalizedPoint(for: touch.location(in: self), allowsClamping: true),
-              shouldSendMove(to: point) else {
+        guard activeTouches(from: event, fallback: touches).count == 1 else {
+            cancelPointerIfNeeded()
             return
         }
 
-        lastPointerPoint = point
-        onPointerEvent(.pointerMove, point)
+        guard let touch = touches.first,
+              let point = normalizedPoint(for: touch.location(in: self), allowsClamping: true) else {
+            return
+        }
+
+        switch pointerIntent {
+        case .idle:
+            return
+        case .pendingTap:
+            guard hasExceededDragThreshold(touch.location(in: self)) else { return }
+            holdDownWorkItem?.cancel()
+            holdDownWorkItem = nil
+            if usesTouchDragForSingleFingerPan {
+                let startPoint = initialPointerPoint ?? point
+                onPointerEvent(.pointerDown, startPoint)
+                pointerIntent = .dragging
+                fallthrough
+            } else {
+                pointerIntent = .scrolling
+                sendScroll(from: touch.location(in: self), timestamp: touch.timestamp, at: point)
+            }
+        case .scrolling:
+            sendScroll(from: touch.location(in: self), timestamp: touch.timestamp, at: point)
+        case .dragging:
+            guard shouldSendMove(to: point) else { return }
+            lastPointerPoint = point
+            onPointerEvent(.pointerMove, point)
+        }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let point: CGPoint?
+        holdDownWorkItem?.cancel()
+        holdDownWorkItem = nil
 
+        let point: CGPoint?
         if let touch = touches.first {
             point = normalizedPoint(for: touch.location(in: self), allowsClamping: true)
         } else {
             point = lastPointerPoint
         }
 
-        if let point {
-            onPointerEvent(.pointerUp, point)
+        switch pointerIntent {
+        case .idle:
+            break
+        case .pendingTap:
+            if let point {
+                onPointerEvent(.pointerDown, point)
+                onPointerEvent(.pointerUp, point)
+            }
+        case .scrolling:
+            if let point {
+                startScrollMomentum(at: point)
+                return
+            }
+        case .dragging:
+            if let point {
+                onPointerEvent(.pointerUp, point)
+            }
         }
 
-        lastPointerPoint = nil
+        resetPointerState()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -1196,13 +1427,124 @@ private final class PointerSurfaceView: UIView {
     }
 
     func cancelPointerIfNeeded() {
-        guard let lastPointerPoint else { return }
-        onPointerEvent(.pointerUp, lastPointerPoint)
-        self.lastPointerPoint = nil
+        holdDownWorkItem?.cancel()
+        holdDownWorkItem = nil
+        stopScrollMomentum()
+
+        if case .dragging = pointerIntent, let lastPointerPoint {
+            onPointerEvent(.pointerUp, lastPointerPoint)
+        }
+
+        resetPointerState()
     }
 
     private func activeTouches(from event: UIEvent?, fallback: Set<UITouch>) -> [UITouch] {
         Array(event?.allTouches ?? fallback)
+    }
+
+    private func scheduleHoldDown(at point: CGPoint) {
+        holdDownWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, case .pendingTap = self.pointerIntent else { return }
+            self.onPointerEvent(.pointerDown, point)
+            self.pointerIntent = .dragging
+        }
+        holdDownWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + holdDownDelay, execute: workItem)
+    }
+
+    private func hasExceededDragThreshold(_ location: CGPoint) -> Bool {
+        guard let initialTouchLocation else { return false }
+        let dx = location.x - initialTouchLocation.x
+        let dy = location.y - initialTouchLocation.y
+        return hypot(dx, dy) >= dragStartThreshold
+    }
+
+    private func resetPointerState() {
+        pointerIntent = .idle
+        initialTouchLocation = nil
+        initialPointerPoint = nil
+        lastTouchLocation = nil
+        lastTouchTimestamp = nil
+        lastScrollVelocity = .zero
+        lastScrollPoint = nil
+        lastPointerPoint = nil
+    }
+
+    private func sendScroll(from location: CGPoint, timestamp: TimeInterval, at point: CGPoint) {
+        guard let lastTouchLocation, let lastTouchTimestamp else {
+            self.lastTouchLocation = location
+            self.lastTouchTimestamp = timestamp
+            return
+        }
+
+        let movement = CGPoint(
+            x: location.x - lastTouchLocation.x,
+            y: location.y - lastTouchLocation.y
+        )
+        self.lastTouchLocation = location
+        self.lastTouchTimestamp = timestamp
+        lastScrollPoint = point
+
+        guard abs(movement.x) > 0.2 || abs(movement.y) > 0.2 else { return }
+        let interval = max(timestamp - lastTouchTimestamp, 1.0 / 120.0)
+        let instantVelocity = CGPoint(x: movement.x / interval, y: movement.y / interval)
+        lastScrollVelocity = CGPoint(
+            x: lastScrollVelocity.x * 0.35 + instantVelocity.x * 0.65,
+            y: lastScrollVelocity.y * 0.35 + instantVelocity.y * 0.65
+        )
+        sendScrollDelta(movement, at: point)
+    }
+
+    private func sendScrollDelta(_ movement: CGPoint, at point: CGPoint) {
+        let scrollSensitivity: CGFloat = 4.4
+        onScrollEvent(
+            point,
+            CGPoint(
+                x: movement.x * scrollSensitivity,
+                y: movement.y * scrollSensitivity
+            )
+        )
+    }
+
+    private func startScrollMomentum(at point: CGPoint) {
+        var velocity = lastScrollVelocity
+        let minimumVelocity: CGFloat = 70
+        guard hypot(velocity.x, velocity.y) >= minimumVelocity else {
+            resetPointerState()
+            return
+        }
+
+        momentumGeneration &+= 1
+        let generation = momentumGeneration
+        let frameInterval: TimeInterval = 1.0 / 60.0
+        let decay: CGFloat = 0.91
+
+        func step(_ remainingSteps: Int) {
+            guard generation == momentumGeneration else { return }
+            guard remainingSteps > 0, hypot(velocity.x, velocity.y) >= 8 else {
+                resetPointerState()
+                return
+            }
+
+            let movement = CGPoint(
+                x: velocity.x * frameInterval,
+                y: velocity.y * frameInterval
+            )
+            sendScrollDelta(movement, at: point)
+            velocity.x *= decay
+            velocity.y *= decay
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + frameInterval) {
+                step(remainingSteps - 1)
+            }
+        }
+
+        step(52)
+    }
+
+    private func stopScrollMomentum() {
+        momentumGeneration &+= 1
     }
 
     private func normalizedPoint(for location: CGPoint, allowsClamping: Bool) -> CGPoint? {

@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreVideo
 import Foundation
 import ImageIO
 import Network
@@ -11,16 +12,18 @@ final class RemoteFrameStreamServer {
     private var readyConnectionIDs: Set<UUID> = []
     private var frameSendInFlightIDs: Set<UUID> = []
     private var pendingFramePackets: [UUID: PendingFramePacket] = [:]
+    private var connectionsNeedingKeyFrame: Set<UUID> = []
     private var retryWorkItem: DispatchWorkItem?
     private let videoEncoder = RemoteVideoEncoder()
     private var lastFrameTime: CFAbsoluteTime = 0
-    private var lastPacket: Data?
+    private var lastPacket: PendingFramePacket?
     private var videoFormatPacket: Data?
     private var videoMaskPacket: Data?
     private var videoMaskSize = CGSize.zero
     private var wallpaperPacket: Data?
     private var windowListPacket: Data?
     private var streamGeneration: UInt64 = 0
+    private var lastBackpressureKeyFrameRequestTime: CFAbsoluteTime = 0
     private var statusHandler: ((FrameServerStatus) -> Void)?
     private var controlHandler: ((RemoteControlMessage) -> Void)?
     private var diagnosticsWindowStartTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
@@ -30,8 +33,21 @@ final class RemoteFrameStreamServer {
     private var sentFrameCount = 0
     private var encodedByteCount = 0
     private var droppedFrameCount = 0
+    private var backpressureKeyFrameRequestCount = 0
+    private var directFrameCount = 0
+    private var capturePrepMilliseconds = 0.0
+    private var cgImageMilliseconds = 0.0
+    private var cropMilliseconds = 0.0
+    private var materializeMilliseconds = 0.0
+    private var pixelBufferMilliseconds = 0.0
+    private var encodeMilliseconds = 0.0
+    private var encoderQueueMilliseconds = 0.0
     private var lastCaptureSize = CGSize.zero
     private var lastEncodedSize = CGSize.zero
+    private var adaptiveBitRate = RemoteFrameStreamConfiguration.videoBitRate
+    private var adaptiveQuality = RemoteFrameStreamConfiguration.videoQuality
+    private var adaptiveFrameRate = RemoteFrameStreamConfiguration.targetFrameRate
+    private var cleanAdaptiveWindowCount = 0
 
     func start(
         statusHandler: @escaping (FrameServerStatus) -> Void,
@@ -91,6 +107,7 @@ final class RemoteFrameStreamServer {
             self.readyConnectionIDs.removeAll()
             self.frameSendInFlightIDs.removeAll()
             self.pendingFramePackets.removeAll()
+            self.connectionsNeedingKeyFrame.removeAll()
             self.lastPacket = nil
             self.videoFormatPacket = nil
             self.videoMaskPacket = nil
@@ -98,6 +115,8 @@ final class RemoteFrameStreamServer {
             self.wallpaperPacket = nil
             self.windowListPacket = nil
             self.streamGeneration &+= 1
+            self.lastBackpressureKeyFrameRequestTime = 0
+            self.resetAdaptiveStreamSettings()
             self.resetDiagnosticsWindow()
             self.videoEncoder.invalidate()
             self.statusHandler?(.offline)
@@ -113,6 +132,9 @@ final class RemoteFrameStreamServer {
             self.videoMaskPacket = nil
             self.videoMaskSize = .zero
             self.pendingFramePackets.removeAll()
+            self.connectionsNeedingKeyFrame.removeAll()
+            self.lastBackpressureKeyFrameRequestTime = 0
+            self.resetAdaptiveStreamSettings()
             self.resetDiagnosticsWindow()
             self.videoEncoder.invalidate()
 
@@ -146,17 +168,29 @@ final class RemoteFrameStreamServer {
     }
 
     func publish(_ image: CGImage, includeAlphaMask: Bool = false) {
+        publish(
+            LiveCaptureFrame(
+                image: image,
+                pixelBuffer: nil,
+                screenFrame: .zero,
+                timing: LiveCaptureFrameTiming()
+            ),
+            includeAlphaMask: includeAlphaMask
+        )
+    }
+
+    func publish(_ frame: LiveCaptureFrame, includeAlphaMask: Bool = false) {
         queue.async {
             let now = CFAbsoluteTimeGetCurrent()
-            guard now - self.lastFrameTime >= 1.0 / RemoteFrameStreamConfiguration.targetFrameRate else { return }
+            guard now - self.lastFrameTime >= 1.0 / self.adaptiveFrameRate else { return }
             self.lastFrameTime = now
             let generation = self.streamGeneration
 
-            let imageSize = CGSize(width: image.width, height: image.height)
-            self.capturedFrameCount += 1
-            self.lastCaptureSize = imageSize
+            guard frame.pixelSize.width > 0, frame.pixelSize.height > 0 else { return }
+            self.recordCaptureTiming(frame.timing, size: frame.pixelSize)
 
-            if includeAlphaMask, image.hasAlpha {
+            if includeAlphaMask, let image = frame.image, image.hasAlpha {
+                let imageSize = CGSize(width: image.width, height: image.height)
                 if self.videoMaskPacket == nil || self.videoMaskSize != imageSize,
                    let maskPacket = Self.makeAlphaMaskPacket(from: image) {
                     self.videoMaskPacket = maskPacket
@@ -175,7 +209,7 @@ final class RemoteFrameStreamServer {
                 }
             }
 
-            self.videoEncoder.encode(image) { [weak self] output in
+            let outputHandler: RemoteVideoEncoder.OutputHandler = { [weak self] output in
                 guard let self else { return }
                 self.queue.async {
                     guard generation == self.streamGeneration else { return }
@@ -187,18 +221,28 @@ final class RemoteFrameStreamServer {
                         for id in self.readyConnectionIDs {
                             self.send(packet, to: id)
                         }
-                    case .frame(let message):
+                    case .frame(let message, let timing):
                         guard let packet = Self.makeVideoFramePacket(message) else { return }
+                        let framePacket = PendingFramePacket(data: packet, isKeyFrame: message.isKeyFrame)
                         self.encodedFrameCount += 1
                         self.encodedByteCount += message.data.count
-                        self.lastEncodedSize = CGSize(width: image.width, height: image.height)
-                        self.lastPacket = packet
+                        self.pixelBufferMilliseconds += timing.pixelBufferMilliseconds
+                        self.encodeMilliseconds += timing.encodeMilliseconds
+                        self.encoderQueueMilliseconds += timing.queueWaitMilliseconds
+                        self.lastEncodedSize = frame.pixelSize
+                        self.lastPacket = framePacket
                         for id in self.readyConnectionIDs {
-                            self.sendFrame(packet, to: id)
+                            self.sendFrame(framePacket, to: id)
                         }
                         self.publishDiagnosticsIfNeeded()
                     }
                 }
+            }
+
+            if let pixelBuffer = frame.pixelBuffer {
+                self.videoEncoder.encode(pixelBuffer, outputHandler: outputHandler)
+            } else if let image = frame.image {
+                self.videoEncoder.encode(image, outputHandler: outputHandler)
             }
         }
     }
@@ -270,8 +314,10 @@ final class RemoteFrameStreamServer {
             if let videoMaskPacket {
                 send(videoMaskPacket, to: id)
             }
-            if let lastPacket {
-                send(lastPacket, to: id)
+            if let lastPacket, lastPacket.isKeyFrame {
+                sendFrame(lastPacket, to: id)
+            } else {
+                connectionsNeedingKeyFrame.insert(id)
             }
             videoEncoder.requestKeyFrame()
         case .waiting(let error):
@@ -290,6 +336,7 @@ final class RemoteFrameStreamServer {
             readyConnectionIDs.remove(id)
             frameSendInFlightIDs.remove(id)
             pendingFramePackets.removeValue(forKey: id)
+            connectionsNeedingKeyFrame.remove(id)
             publishStatus()
             return
         }
@@ -308,22 +355,46 @@ final class RemoteFrameStreamServer {
         })
     }
 
-    private func sendFrame(_ packet: Data, to id: UUID) {
+    private func sendFrame(_ packet: PendingFramePacket, to id: UUID) {
         guard connections[id] != nil else {
             readyConnectionIDs.remove(id)
             frameSendInFlightIDs.remove(id)
             pendingFramePackets.removeValue(forKey: id)
+            connectionsNeedingKeyFrame.remove(id)
             publishStatus()
+            return
+        }
+
+        if connectionsNeedingKeyFrame.contains(id), !packet.isKeyFrame {
+            droppedFrameCount += 1
+            requestBackpressureKeyFrameIfNeeded()
             return
         }
 
         if pendingFramePackets[id] != nil {
             droppedFrameCount += 1
-            videoEncoder.requestKeyFrame()
+            connectionsNeedingKeyFrame.insert(id)
+            requestBackpressureKeyFrameIfNeeded()
+            guard packet.isKeyFrame else { return }
         }
 
-        pendingFramePackets[id] = PendingFramePacket(data: packet)
+        if packet.isKeyFrame {
+            connectionsNeedingKeyFrame.remove(id)
+        }
+
+        pendingFramePackets[id] = packet
         drainFrameSend(for: id)
+    }
+
+    private func requestBackpressureKeyFrameIfNeeded() {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastBackpressureKeyFrameRequestTime >= RemoteFrameStreamConfiguration.backpressureKeyFrameRequestInterval else {
+            return
+        }
+
+        lastBackpressureKeyFrameRequestTime = now
+        backpressureKeyFrameRequestCount += 1
+        videoEncoder.requestKeyFrame()
     }
 
     private func drainFrameSend(for id: UUID) {
@@ -357,6 +428,7 @@ final class RemoteFrameStreamServer {
         readyConnectionIDs.remove(id)
         frameSendInFlightIDs.remove(id)
         pendingFramePackets.removeValue(forKey: id)
+        connectionsNeedingKeyFrame.remove(id)
         publishStatus()
     }
 
@@ -402,7 +474,12 @@ final class RemoteFrameStreamServer {
 
             if let data, data.count == length,
                let message = try? JSONDecoder().decode(RemoteControlMessage.self, from: data) {
-                self.controlHandler?(message)
+                if message.kind == .requestKeyFrame {
+                    self.connectionsNeedingKeyFrame.insert(id)
+                    self.requestBackpressureKeyFrameIfNeeded()
+                } else {
+                    self.controlHandler?(message)
+                }
             }
 
             self.receiveControlLength(from: id)
@@ -413,24 +490,57 @@ final class RemoteFrameStreamServer {
         statusHandler?(.online(port: RemoteFrameStreamConfiguration.tcpPort, clientCount: readyConnectionIDs.count))
     }
 
+    private func recordCaptureTiming(_ timing: LiveCaptureFrameTiming, size: CGSize) {
+        capturedFrameCount += 1
+        lastCaptureSize = size
+        capturePrepMilliseconds += timing.totalMilliseconds
+        cgImageMilliseconds += timing.cgImageMilliseconds
+        cropMilliseconds += timing.cropMilliseconds
+        materializeMilliseconds += timing.materializeMilliseconds
+        if timing.usesDirectPixelBuffer {
+            directFrameCount += 1
+        }
+    }
+
     private func publishDiagnosticsIfNeeded() {
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastDiagnosticsTime >= 1 else { return }
 
         let duration = max(now - diagnosticsWindowStartTime, 0.001)
+        let captureCount = max(capturedFrameCount, 1)
+        let encodeCount = max(encodedFrameCount, 1)
+        let encodedFPS = Double(encodedFrameCount) / duration
+        let sentFPS = Double(sentFrameCount) / duration
+        adaptStreamIfNeeded(
+            droppedFrames: droppedFrameCount,
+            backpressureKeyFrames: backpressureKeyFrameRequestCount,
+            encodedFPS: encodedFPS,
+            sentFPS: sentFPS
+        )
         let message = RemoteStreamDiagnosticsMessage(
             captureWidth: Int(lastCaptureSize.width),
             captureHeight: Int(lastCaptureSize.height),
             encodedWidth: Int(lastEncodedSize.width),
             encodedHeight: Int(lastEncodedSize.height),
             captureFPS: Double(capturedFrameCount) / duration,
-            encodedFPS: Double(encodedFrameCount) / duration,
-            sentFPS: Double(sentFrameCount) / duration,
+            encodedFPS: encodedFPS,
+            sentFPS: sentFPS,
             bitrateMbps: Double(encodedByteCount * 8) / duration / 1_000_000,
-            configuredBitrateMbps: Double(RemoteFrameStreamConfiguration.videoBitRate) / 1_000_000,
+            configuredBitrateMbps: Double(adaptiveBitRate) / 1_000_000,
+            targetFPS: adaptiveFrameRate,
+            videoQuality: adaptiveQuality,
             droppedFrames: droppedFrameCount,
+            backpressureKeyFrames: backpressureKeyFrameRequestCount,
             keyFrameInterval: RemoteFrameStreamConfiguration.videoKeyFrameInterval,
-            codec: "H.264"
+            codec: "H.264",
+            capturePrepMS: capturePrepMilliseconds / Double(captureCount),
+            cgImageMS: cgImageMilliseconds / Double(captureCount),
+            cropMS: cropMilliseconds / Double(captureCount),
+            materializeMS: materializeMilliseconds / Double(captureCount),
+            pixelBufferMS: pixelBufferMilliseconds / Double(encodeCount),
+            encodeMS: encodeMilliseconds / Double(encodeCount),
+            encoderQueueMS: encoderQueueMilliseconds / Double(encodeCount),
+            directFramePercent: Double(directFrameCount) / Double(captureCount) * 100
         )
 
         guard let packet = Self.makePacket(type: .streamDiagnostics, message: message) else { return }
@@ -445,6 +555,100 @@ final class RemoteFrameStreamServer {
         sentFrameCount = 0
         encodedByteCount = 0
         droppedFrameCount = 0
+        backpressureKeyFrameRequestCount = 0
+        directFrameCount = 0
+        capturePrepMilliseconds = 0
+        cgImageMilliseconds = 0
+        cropMilliseconds = 0
+        materializeMilliseconds = 0
+        pixelBufferMilliseconds = 0
+        encodeMilliseconds = 0
+        encoderQueueMilliseconds = 0
+    }
+
+    private func adaptStreamIfNeeded(
+        droppedFrames: Int,
+        backpressureKeyFrames: Int,
+        encodedFPS: Double,
+        sentFPS: Double
+    ) {
+        let sendRatio = encodedFPS > 0 ? sentFPS / encodedFPS : 1
+        let isCongested = droppedFrames > 0 || backpressureKeyFrames > 0 || sendRatio < 0.82
+
+        if isCongested {
+            cleanAdaptiveWindowCount = 0
+            let nextBitRate = max(
+                RemoteFrameStreamConfiguration.minimumAdaptiveVideoBitRate,
+                Int(Double(adaptiveBitRate) * 0.72)
+            )
+            let nextQuality = max(
+                RemoteFrameStreamConfiguration.minimumAdaptiveVideoQuality,
+                adaptiveQuality - 0.06
+            )
+            let nextFrameRate = max(
+                RemoteFrameStreamConfiguration.minimumAdaptiveFrameRate,
+                floor(adaptiveFrameRate * 0.82)
+            )
+            applyAdaptiveStreamSettings(bitRate: nextBitRate, quality: nextQuality, frameRate: nextFrameRate)
+            return
+        }
+
+        cleanAdaptiveWindowCount += 1
+        guard cleanAdaptiveWindowCount >= 4 else { return }
+        cleanAdaptiveWindowCount = 0
+
+        let nextBitRate = min(
+            RemoteFrameStreamConfiguration.maximumAdaptiveVideoBitRate,
+            Int(Double(adaptiveBitRate) * 1.14)
+        )
+        let nextQuality = min(
+            RemoteFrameStreamConfiguration.maximumAdaptiveVideoQuality,
+            adaptiveQuality + 0.025
+        )
+        let nextFrameRate = min(
+            RemoteFrameStreamConfiguration.maximumAdaptiveFrameRate,
+            adaptiveFrameRate + 2
+        )
+        applyAdaptiveStreamSettings(bitRate: nextBitRate, quality: nextQuality, frameRate: nextFrameRate)
+    }
+
+    private func resetAdaptiveStreamSettings() {
+        cleanAdaptiveWindowCount = 0
+        applyAdaptiveStreamSettings(
+            bitRate: RemoteFrameStreamConfiguration.videoBitRate,
+            quality: RemoteFrameStreamConfiguration.videoQuality,
+            frameRate: RemoteFrameStreamConfiguration.targetFrameRate
+        )
+    }
+
+    private func applyAdaptiveStreamSettings(bitRate: Int, quality: Double, frameRate: Double) {
+        let clampedBitRate = min(
+            max(bitRate, RemoteFrameStreamConfiguration.minimumAdaptiveVideoBitRate),
+            RemoteFrameStreamConfiguration.maximumAdaptiveVideoBitRate
+        )
+        let clampedQuality = min(
+            max(quality, RemoteFrameStreamConfiguration.minimumAdaptiveVideoQuality),
+            RemoteFrameStreamConfiguration.maximumAdaptiveVideoQuality
+        )
+        let clampedFrameRate = min(
+            max(frameRate, RemoteFrameStreamConfiguration.minimumAdaptiveFrameRate),
+            RemoteFrameStreamConfiguration.maximumAdaptiveFrameRate
+        )
+
+        guard clampedBitRate != adaptiveBitRate ||
+              clampedQuality != adaptiveQuality ||
+              clampedFrameRate != adaptiveFrameRate else {
+            return
+        }
+
+        adaptiveBitRate = clampedBitRate
+        adaptiveQuality = clampedQuality
+        adaptiveFrameRate = clampedFrameRate
+        videoEncoder.updateAdaptiveSettings(
+            bitRate: clampedBitRate,
+            quality: clampedQuality,
+            frameRate: clampedFrameRate
+        )
     }
 
     private func resetDiagnosticsWindow() {
@@ -455,6 +659,15 @@ final class RemoteFrameStreamServer {
         sentFrameCount = 0
         encodedByteCount = 0
         droppedFrameCount = 0
+        backpressureKeyFrameRequestCount = 0
+        directFrameCount = 0
+        capturePrepMilliseconds = 0
+        cgImageMilliseconds = 0
+        cropMilliseconds = 0
+        materializeMilliseconds = 0
+        pixelBufferMilliseconds = 0
+        encodeMilliseconds = 0
+        encoderQueueMilliseconds = 0
         lastCaptureSize = .zero
         lastEncodedSize = .zero
     }
@@ -675,6 +888,7 @@ final class RemoteFrameStreamServer {
 
 private struct PendingFramePacket {
     var data: Data
+    var isKeyFrame: Bool
 }
 
 private extension CGImage {

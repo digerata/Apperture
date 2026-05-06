@@ -28,6 +28,9 @@ final class RemoteFrameStreamClient: ObservableObject {
     private var connectedHostName: String?
     private var manualEndpoint: ManualStreamEndpoint?
     private let videoDecoder = RemoteVideoDecoder()
+    private var nextSequenceNumber: UInt64 = 0
+    private var lastKeyFrameRequestTime: CFAbsoluteTime = 0
+    private var requiresVideoKeyFrame = false
 
     init() {
         if let savedEndpoint = UserDefaults.standard.string(forKey: Self.manualEndpointDefaultsKey),
@@ -82,6 +85,9 @@ final class RemoteFrameStreamClient: ObservableObject {
         wallpaper = nil
         windows = []
         streamDiagnostics = nil
+        nextSequenceNumber = 0
+        lastKeyFrameRequestTime = 0
+        requiresVideoKeyFrame = false
         videoDecoder.reset()
         state = .idle
         updateDiagnostics { diagnostics in
@@ -117,6 +123,18 @@ final class RemoteFrameStreamClient: ObservableObject {
                 }
             })
         }
+    }
+
+    func requestKeyFrameIfNeeded() {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastKeyFrameRequestTime >= RemoteFrameStreamConfiguration.backpressureKeyFrameRequestInterval else {
+            return
+        }
+
+        lastKeyFrameRequestTime = now
+        requiresVideoKeyFrame = true
+        nextSequenceNumber += 1
+        send(RemoteControlMessage(requestKeyFrameWithSequenceNumber: nextSequenceNumber))
     }
 
     func clearCurrentFrame() {
@@ -430,10 +448,15 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             videoFrameSize = CGSize(width: CGFloat(message.width), height: CGFloat(message.height))
+            requiresVideoKeyFrame = true
             videoDecoder.configure(message)
         case .videoFrame:
             guard let message = RemoteVideoFrameMessage.decodePayload(Data(imageData)) else {
                 return
+            }
+            if requiresVideoKeyFrame {
+                guard message.isKeyFrame else { return }
+                requiresVideoKeyFrame = false
             }
             videoDecoder.decode(message) { [weak self] sampleBuffer, size in
                 Task { @MainActor in
@@ -493,7 +516,9 @@ final class RemoteFrameStreamClient: ObservableObject {
             return
         }
 
-        state = candidates.isEmpty ? .searching : .failed(message)
+        state = candidates.isEmpty || Self.isTransientDiscoveryResolutionFailure(message)
+            ? .searching
+            : .failed(message)
         scheduleRetry()
     }
 
@@ -543,6 +568,11 @@ final class RemoteFrameStreamClient: ObservableObject {
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
         return parameters
+    }
+
+    private static func isTransientDiscoveryResolutionFailure(_ message: String) -> Bool {
+        message.localizedCaseInsensitiveContains("NoSuchRecord") ||
+            message.contains("-65554")
     }
 
     private static let manualEndpointDefaultsKey = "RemoteFrameStreamClient.manualEndpoint"

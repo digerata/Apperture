@@ -3,6 +3,9 @@ import CoreGraphics
 
 struct MirrorWindow: Identifiable, Equatable {
     let id: UInt32
+    var applicationName: String
+    var applicationBundleIdentifier: String?
+    var applicationIconPNGData: Data?
     var ownerName: String
     var title: String
     var processID: Int32
@@ -11,15 +14,30 @@ struct MirrorWindow: Identifiable, Equatable {
     var isOnScreen: Bool
 
     var displayTitle: String {
-        title.isEmpty ? ownerName : title
+        title.isEmpty ? applicationName : title
+    }
+
+    var windowListTitle: String {
+        title.isEmpty ? "Main Window" : title
+    }
+
+    var sizeDescription: String {
+        "\(Int(frame.width)) x \(Int(frame.height))"
+    }
+
+    var windowListSubtitle: String {
+        sizeDescription
     }
 
     var subtitle: String {
-        let size = "\(Int(frame.width)) x \(Int(frame.height))"
         if title.isEmpty {
-            return size
+            return sizeDescription
         }
-        return "\(ownerName) - \(size)"
+        return "\(applicationName) - \(sizeDescription)"
+    }
+
+    var applicationGroupID: String {
+        applicationBundleIdentifier ?? applicationName.lowercased()
     }
 
     var isLikelySimulator: Bool {

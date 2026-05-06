@@ -16,8 +16,13 @@ final class RemoteVideoEncoder {
     private var outputHandler: OutputHandler?
     private var lastFormat: RemoteVideoFormatMessage?
     private var shouldForceNextKeyFrame = true
+    private var pendingTimings: [Double: RemoteVideoEncodeTiming] = [:]
+    private var targetBitRate = RemoteFrameStreamConfiguration.videoBitRate
+    private var targetQuality = RemoteFrameStreamConfiguration.videoQuality
+    private var targetFrameRate = RemoteFrameStreamConfiguration.targetFrameRate
 
     func encode(_ image: CGImage, outputHandler: @escaping OutputHandler) {
+        let requestStart = DispatchTime.now().uptimeNanoseconds
         queue.async {
             guard !self.isEncoding else { return }
             self.isEncoding = true
@@ -28,41 +33,44 @@ final class RemoteVideoEncoder {
 
             do {
                 try self.prepareSessionIfNeeded(width: image.width, height: image.height, outputHandler: outputHandler)
+                let pixelBufferStart = DispatchTime.now().uptimeNanoseconds
                 guard let pixelBuffer = Self.makePixelBuffer(from: image) else { return }
+                let pixelBufferMilliseconds = Self.milliseconds(from: pixelBufferStart)
 
-                let frameRate = Int32(RemoteFrameStreamConfiguration.targetFrameRate.rounded())
-                let frameDuration = CMTime(value: 1, timescale: frameRate)
-                let presentationTime = CMTime(value: self.frameIndex, timescale: frameRate)
-                self.frameIndex += 1
+                try self.encodePreparedPixelBuffer(
+                    pixelBuffer,
+                    queueWaitMilliseconds: Self.milliseconds(from: requestStart),
+                    pixelBufferMilliseconds: pixelBufferMilliseconds,
+                    usedDirectPixelBuffer: false
+                )
+            } catch {
+                self.invalidate()
+            }
+        }
+    }
 
-                guard let compressionSession = self.compressionSession else { return }
-                let frameProperties: CFDictionary?
-                if self.shouldForceNextKeyFrame {
-                    self.shouldForceNextKeyFrame = false
-                    frameProperties = [
-                        kVTEncodeFrameOptionKey_ForceKeyFrame: true
-                    ] as CFDictionary
-                } else {
-                    frameProperties = nil
-                }
+    func encode(_ pixelBuffer: CVPixelBuffer, outputHandler: @escaping OutputHandler) {
+        let requestStart = DispatchTime.now().uptimeNanoseconds
+        queue.async {
+            guard !self.isEncoding else { return }
+            self.isEncoding = true
 
-                let status = VTCompressionSessionEncodeFrame(
-                    compressionSession,
-                    imageBuffer: pixelBuffer,
-                    presentationTimeStamp: presentationTime,
-                    duration: frameDuration,
-                    frameProperties: frameProperties,
-                    sourceFrameRefcon: nil,
-                    infoFlagsOut: nil
+            defer {
+                self.isEncoding = false
+            }
+
+            do {
+                try self.prepareSessionIfNeeded(
+                    width: CVPixelBufferGetWidth(pixelBuffer),
+                    height: CVPixelBufferGetHeight(pixelBuffer),
+                    outputHandler: outputHandler
                 )
 
-                guard status == noErr else {
-                    throw RemoteVideoEncoderError.cannotEncodeFrame(status)
-                }
-
-                VTCompressionSessionCompleteFrames(
-                    compressionSession,
-                    untilPresentationTimeStamp: presentationTime
+                try self.encodePreparedPixelBuffer(
+                    pixelBuffer,
+                    queueWaitMilliseconds: Self.milliseconds(from: requestStart),
+                    pixelBufferMilliseconds: 0,
+                    usedDirectPixelBuffer: true
                 )
             } catch {
                 self.invalidate()
@@ -76,6 +84,16 @@ final class RemoteVideoEncoder {
         }
     }
 
+    func updateAdaptiveSettings(bitRate: Int, quality: Double, frameRate: Double) {
+        queue.async {
+            self.targetBitRate = bitRate
+            self.targetQuality = quality
+            self.targetFrameRate = frameRate
+            guard let compressionSession = self.compressionSession else { return }
+            self.applyAdaptiveSettings(to: compressionSession)
+        }
+    }
+
     func invalidate() {
         queue.async {
             self.compressionSession.map(VTCompressionSessionInvalidate)
@@ -85,7 +103,60 @@ final class RemoteVideoEncoder {
             self.frameIndex = 0
             self.isEncoding = false
             self.shouldForceNextKeyFrame = true
+            self.pendingTimings.removeAll()
         }
+    }
+
+    private func encodePreparedPixelBuffer(
+        _ pixelBuffer: CVPixelBuffer,
+        queueWaitMilliseconds: Double,
+        pixelBufferMilliseconds: Double,
+        usedDirectPixelBuffer: Bool
+    ) throws {
+        let frameRate = Int32(max(1, targetFrameRate.rounded()))
+        let frameDuration = CMTime(value: 1, timescale: frameRate)
+        let presentationTime = CMTime(value: frameIndex, timescale: frameRate)
+        frameIndex += 1
+
+        guard let compressionSession else { return }
+        let frameProperties: CFDictionary?
+        if shouldForceNextKeyFrame {
+            shouldForceNextKeyFrame = false
+            frameProperties = [
+                kVTEncodeFrameOptionKey_ForceKeyFrame: true
+            ] as CFDictionary
+        } else {
+            frameProperties = nil
+        }
+
+        let encodeStart = DispatchTime.now().uptimeNanoseconds
+        pendingTimings[presentationTime.seconds] = RemoteVideoEncodeTiming(
+            queueWaitMilliseconds: queueWaitMilliseconds,
+            pixelBufferMilliseconds: pixelBufferMilliseconds,
+            encodeMilliseconds: 0,
+            usedDirectPixelBuffer: usedDirectPixelBuffer,
+            encodeStartNanoseconds: encodeStart
+        )
+
+        let status = VTCompressionSessionEncodeFrame(
+            compressionSession,
+            imageBuffer: pixelBuffer,
+            presentationTimeStamp: presentationTime,
+            duration: frameDuration,
+            frameProperties: frameProperties,
+            sourceFrameRefcon: nil,
+            infoFlagsOut: nil
+        )
+
+        guard status == noErr else {
+            pendingTimings.removeValue(forKey: presentationTime.seconds)
+            throw RemoteVideoEncoderError.cannotEncodeFrame(status)
+        }
+
+        VTCompressionSessionCompleteFrames(
+            compressionSession,
+            untilPresentationTimeStamp: presentationTime
+        )
     }
 
     private func prepareSessionIfNeeded(width: Int, height: Int, outputHandler: @escaping OutputHandler) throws {
@@ -97,6 +168,7 @@ final class RemoteVideoEncoder {
         compressionSession = nil
         formatDescription = nil
         lastFormat = nil
+        pendingTimings.removeAll()
         currentSize = size
         frameIndex = 0
         shouldForceNextKeyFrame = true
@@ -126,13 +198,23 @@ final class RemoteVideoEncoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTSessionSetProperty(
             session,
+            key: kVTCompressionPropertyKey_MaxFrameDelayCount,
+            value: 1 as NSNumber
+        )
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_Quality,
+            value: targetQuality as NSNumber
+        )
+        VTSessionSetProperty(
+            session,
             key: kVTCompressionPropertyKey_ExpectedFrameRate,
-            value: RemoteFrameStreamConfiguration.targetFrameRate as NSNumber
+            value: targetFrameRate as NSNumber
         )
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_AverageBitRate,
-            value: RemoteFrameStreamConfiguration.videoBitRate as NSNumber
+            value: targetBitRate as NSNumber
         )
         VTSessionSetProperty(
             session,
@@ -144,7 +226,26 @@ final class RemoteVideoEncoder {
             key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
             value: (Double(RemoteFrameStreamConfiguration.videoKeyFrameInterval) / RemoteFrameStreamConfiguration.targetFrameRate) as NSNumber
         )
+        applyAdaptiveSettings(to: session)
         VTCompressionSessionPrepareToEncodeFrames(session)
+    }
+
+    private func applyAdaptiveSettings(to session: VTCompressionSession) {
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_Quality,
+            value: targetQuality as NSNumber
+        )
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_ExpectedFrameRate,
+            value: targetFrameRate as NSNumber
+        )
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_AverageBitRate,
+            value: targetBitRate as NSNumber
+        )
     }
 
     private static let outputCallback: VTCompressionOutputCallback = { refcon, _, status, _, sampleBuffer in
@@ -198,6 +299,11 @@ final class RemoteVideoEncoder {
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         return pixelBuffer
     }
+
+    private static func milliseconds(from start: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    }
+
     private func handle(_ sampleBuffer: CMSampleBuffer) {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let frameData = Self.sampleData(from: sampleBuffer) else {
@@ -209,14 +315,22 @@ final class RemoteVideoEncoder {
             outputHandler?(.format(format))
         }
 
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+        var timing = pendingTimings.removeValue(forKey: presentationTime) ?? RemoteVideoEncodeTiming()
+        if timing.encodeStartNanoseconds > 0 {
+            timing.encodeMilliseconds = Self.milliseconds(from: timing.encodeStartNanoseconds)
+            timing.encodeStartNanoseconds = 0
+        }
+
         outputHandler?(
             .frame(
                 RemoteVideoFrameMessage(
                     isKeyFrame: Self.isKeyFrame(sampleBuffer),
-                    presentationTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds,
+                    presentationTime: presentationTime,
                     duration: CMSampleBufferGetDuration(sampleBuffer).seconds,
                     data: frameData
-                )
+                ),
+                timing
             )
         )
     }
@@ -293,7 +407,15 @@ final class RemoteVideoEncoder {
 
 enum RemoteVideoEncoderOutput {
     case format(RemoteVideoFormatMessage)
-    case frame(RemoteVideoFrameMessage)
+    case frame(RemoteVideoFrameMessage, RemoteVideoEncodeTiming)
+}
+
+struct RemoteVideoEncodeTiming {
+    var queueWaitMilliseconds: Double = 0
+    var pixelBufferMilliseconds: Double = 0
+    var encodeMilliseconds: Double = 0
+    var usedDirectPixelBuffer = false
+    fileprivate var encodeStartNanoseconds: UInt64 = 0
 }
 
 private enum RemoteVideoEncoderError: Error {

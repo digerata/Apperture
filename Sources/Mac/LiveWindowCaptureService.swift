@@ -7,8 +7,50 @@ import ScreenCaptureKit
 import VideoToolbox
 
 struct LiveCaptureFrame {
-    var image: CGImage
+    var image: CGImage?
+    var pixelBuffer: CVPixelBuffer?
     var screenFrame: CGRect
+    var timing: LiveCaptureFrameTiming
+
+    var previewImage: CGImage? {
+        if let image {
+            return image
+        }
+
+        guard let pixelBuffer else {
+            return nil
+        }
+
+        var image: CGImage?
+        let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &image)
+        guard status == noErr else {
+            return nil
+        }
+        return image
+    }
+
+    var pixelSize: CGSize {
+        if let image {
+            return CGSize(width: image.width, height: image.height)
+        }
+
+        if let pixelBuffer {
+            return CGSize(
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
+        }
+
+        return .zero
+    }
+}
+
+struct LiveCaptureFrameTiming {
+    var cgImageMilliseconds: Double = 0
+    var cropMilliseconds: Double = 0
+    var materializeMilliseconds: Double = 0
+    var totalMilliseconds: Double = 0
+    var usesDirectPixelBuffer = false
 }
 
 enum LiveCaptureMode {
@@ -33,6 +75,33 @@ final class LiveWindowCaptureService: NSObject {
         }
     }
 
+    static func bootstrapFrame(for window: MirrorWindow, mode: LiveCaptureMode) async -> LiveCaptureFrame? {
+        guard mode == .window else { return nil }
+
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            guard let capturedWindow = content.windows.first(where: { $0.windowID == window.id }) else {
+                return nil
+            }
+
+            let filter = SCContentFilter(desktopIndependentWindow: capturedWindow)
+            let configuration = makeConfiguration(for: capturedWindow, filter: filter)
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: configuration
+            )
+
+            return LiveCaptureFrame(
+                image: image,
+                pixelBuffer: nil,
+                screenFrame: window.frame,
+                timing: LiveCaptureFrameTiming()
+            )
+        } catch {
+            return nil
+        }
+    }
+
     func start(
         windowID: CGWindowID,
         mode: LiveCaptureMode = .window,
@@ -48,7 +117,7 @@ final class LiveWindowCaptureService: NSObject {
         }
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        let configuration = makeConfiguration(for: window, filter: filter)
+        let configuration = Self.makeConfiguration(for: window, filter: filter)
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
 
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
@@ -87,7 +156,7 @@ final class LiveWindowCaptureService: NSObject {
         captureMode = .window
     }
 
-    private func makeConfiguration(for window: SCWindow, filter: SCContentFilter) -> SCStreamConfiguration {
+    private static func makeConfiguration(for window: SCWindow, filter: SCContentFilter) -> SCStreamConfiguration {
         let configuration = SCStreamConfiguration()
         let nativeScale = max(CGFloat(filter.pointPixelScale), Self.displayScale(for: window), 1)
         let captureRect = filter.contentRect.isEmpty ? window.frame : filter.contentRect
@@ -136,13 +205,28 @@ final class LiveWindowCaptureService: NSObject {
 
 extension LiveWindowCaptureService: SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        let frameStart = DispatchTime.now().uptimeNanoseconds
         guard type == .screen else { return }
         guard CMSampleBufferIsValid(sampleBuffer) else { return }
         guard Self.isCompleteFrame(sampleBuffer) else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        if RemoteFrameStreamConfiguration.enablesDirectCapturePixelBufferEncoding,
+           let directFrame = Self.makeDirectFrame(
+            from: pixelBuffer,
+            sampleBuffer: sampleBuffer,
+            fallbackScreenFrame: fallbackScreenFrame,
+            mode: captureMode,
+            frameStart: frameStart
+        ) {
+            frameHandler?(directFrame)
+            return
+        }
+
+        let cgImageStart = DispatchTime.now().uptimeNanoseconds
         var image: CGImage?
         let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &image)
+        let cgImageMilliseconds = Self.milliseconds(from: cgImageStart)
 
         guard status == noErr, let image else { return }
         frameHandler?(
@@ -150,7 +234,9 @@ extension LiveWindowCaptureService: SCStreamOutput {
                 from: image,
                 sampleBuffer: sampleBuffer,
                 fallbackScreenFrame: fallbackScreenFrame,
-                mode: captureMode
+                mode: captureMode,
+                frameStart: frameStart,
+                cgImageMilliseconds: cgImageMilliseconds
             )
         )
     }
@@ -165,30 +251,151 @@ extension LiveWindowCaptureService: SCStreamOutput {
         return status == .complete || status == .started
     }
 
+    private static func makeDirectFrame(
+        from pixelBuffer: CVPixelBuffer,
+        sampleBuffer: CMSampleBuffer,
+        fallbackScreenFrame: CGRect?,
+        mode: LiveCaptureMode,
+        frameStart: UInt64
+    ) -> LiveCaptureFrame? {
+        guard mode == .window else { return nil }
+
+        let attachments = frameAttachments(from: sampleBuffer)
+        let imageSize = CGSize(
+            width: CVPixelBufferGetWidth(pixelBuffer),
+            height: CVPixelBufferGetHeight(pixelBuffer)
+        )
+        let screenFrame = screenFrame(
+            from: attachments,
+            fallbackScreenFrame: fallbackScreenFrame,
+            imageSize: imageSize
+        )
+
+        guard preferredCropRect(from: attachments, imageSize: imageSize, mode: mode) == nil else {
+            return nil
+        }
+
+        let copyStart = DispatchTime.now().uptimeNanoseconds
+        guard let stablePixelBuffer = copyPixelBuffer(pixelBuffer) else {
+            return nil
+        }
+        let copyMilliseconds = milliseconds(from: copyStart)
+
+        return LiveCaptureFrame(
+            image: nil,
+            pixelBuffer: stablePixelBuffer,
+            screenFrame: screenFrame,
+            timing: LiveCaptureFrameTiming(
+                materializeMilliseconds: copyMilliseconds,
+                totalMilliseconds: milliseconds(from: frameStart),
+                usesDirectPixelBuffer: true
+            )
+        )
+    }
+
+    private static func copyPixelBuffer(_ sourcePixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
+        let width = CVPixelBufferGetWidth(sourcePixelBuffer)
+        let height = CVPixelBufferGetHeight(sourcePixelBuffer)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(sourcePixelBuffer)
+        let attributes = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat
+        ] as CFDictionary
+
+        var copiedPixelBuffer: CVPixelBuffer?
+        guard CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            pixelFormat,
+            attributes,
+            &copiedPixelBuffer
+        ) == kCVReturnSuccess, let copiedPixelBuffer else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(sourcePixelBuffer, .readOnly)
+        CVPixelBufferLockBaseAddress(copiedPixelBuffer, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(copiedPixelBuffer, [])
+            CVPixelBufferUnlockBaseAddress(sourcePixelBuffer, .readOnly)
+        }
+
+        guard let sourceBaseAddress = CVPixelBufferGetBaseAddress(sourcePixelBuffer),
+              let destinationBaseAddress = CVPixelBufferGetBaseAddress(copiedPixelBuffer) else {
+            return nil
+        }
+
+        let sourceBytesPerRow = CVPixelBufferGetBytesPerRow(sourcePixelBuffer)
+        let destinationBytesPerRow = CVPixelBufferGetBytesPerRow(copiedPixelBuffer)
+        let copiedBytesPerRow = min(sourceBytesPerRow, destinationBytesPerRow)
+
+        for row in 0..<height {
+            memcpy(
+                destinationBaseAddress.advanced(by: row * destinationBytesPerRow),
+                sourceBaseAddress.advanced(by: row * sourceBytesPerRow),
+                copiedBytesPerRow
+            )
+        }
+
+        return copiedPixelBuffer
+    }
+
     private static func makeFrame(
         from image: CGImage,
         sampleBuffer: CMSampleBuffer,
         fallbackScreenFrame: CGRect?,
-        mode: LiveCaptureMode
+        mode: LiveCaptureMode,
+        frameStart: UInt64,
+        cgImageMilliseconds: Double
     ) -> LiveCaptureFrame {
         let attachments = frameAttachments(from: sampleBuffer)
-        let screenFrame = rectValue(attachments?[SCStreamFrameInfo.screenRect]) ?? fallbackScreenFrame ?? CGRect(
-            x: 0,
-            y: 0,
-            width: CGFloat(image.width),
-            height: CGFloat(image.height)
+        let imageSize = CGSize(width: image.width, height: image.height)
+        let screenFrame = screenFrame(
+            from: attachments,
+            fallbackScreenFrame: fallbackScreenFrame,
+            imageSize: imageSize
         )
 
-        guard let cropRect = preferredCropRect(from: attachments, image: image, mode: mode) else {
-            return LiveCaptureFrame(image: materializedCopy(of: image) ?? image, screenFrame: screenFrame)
+        guard let cropRect = preferredCropRect(from: attachments, imageSize: imageSize, image: image, mode: mode) else {
+            let materializeStart = DispatchTime.now().uptimeNanoseconds
+            let outputImage = materializedCopy(of: image) ?? image
+            return LiveCaptureFrame(
+                image: outputImage,
+                pixelBuffer: nil,
+                screenFrame: screenFrame,
+                timing: LiveCaptureFrameTiming(
+                    cgImageMilliseconds: cgImageMilliseconds,
+                    materializeMilliseconds: milliseconds(from: materializeStart),
+                    totalMilliseconds: milliseconds(from: frameStart)
+                )
+            )
         }
 
+        let cropStart = DispatchTime.now().uptimeNanoseconds
         guard let croppedImage = image.cropping(to: cropRect.integral) else {
-            return LiveCaptureFrame(image: materializedCopy(of: image) ?? image, screenFrame: screenFrame)
+            let materializeStart = DispatchTime.now().uptimeNanoseconds
+            let outputImage = materializedCopy(of: image) ?? image
+            return LiveCaptureFrame(
+                image: outputImage,
+                pixelBuffer: nil,
+                screenFrame: screenFrame,
+                timing: LiveCaptureFrameTiming(
+                    cgImageMilliseconds: cgImageMilliseconds,
+                    cropMilliseconds: milliseconds(from: cropStart),
+                    materializeMilliseconds: milliseconds(from: materializeStart),
+                    totalMilliseconds: milliseconds(from: frameStart)
+                )
+            )
         }
+        let cropMilliseconds = milliseconds(from: cropStart)
+
+        let materializeStart = DispatchTime.now().uptimeNanoseconds
         let outputImage = mode == .simulator
             ? transparentEdgeBackground(in: croppedImage) ?? croppedImage
             : materializedCopy(of: croppedImage) ?? croppedImage
+        let materializeMilliseconds = milliseconds(from: materializeStart)
 
         let xScale = screenFrame.width > 0 ? CGFloat(image.width) / screenFrame.width : 1
         let yScale = screenFrame.height > 0 ? CGFloat(image.height) / screenFrame.height : 1
@@ -199,7 +406,17 @@ extension LiveWindowCaptureService: SCStreamOutput {
             height: cropRect.height / max(yScale, 1)
         )
 
-        return LiveCaptureFrame(image: outputImage, screenFrame: croppedScreenFrame)
+        return LiveCaptureFrame(
+            image: outputImage,
+            pixelBuffer: nil,
+            screenFrame: croppedScreenFrame,
+            timing: LiveCaptureFrameTiming(
+                cgImageMilliseconds: cgImageMilliseconds,
+                cropMilliseconds: cropMilliseconds,
+                materializeMilliseconds: materializeMilliseconds,
+                totalMilliseconds: milliseconds(from: frameStart)
+            )
+        )
     }
 
     private static func materializedCopy(of image: CGImage) -> CGImage? {
@@ -227,16 +444,41 @@ extension LiveWindowCaptureService: SCStreamOutput {
 
     private static func preferredCropRect(
         from attachments: [SCStreamFrameInfo: Any]?,
-        image: CGImage,
+        imageSize: CGSize,
         mode: LiveCaptureMode
     ) -> CGRect? {
         guard let attachments else { return nil }
-        let imageRect = CGRect(x: 0, y: 0, width: CGFloat(image.width), height: CGFloat(image.height))
+        let imageRect = CGRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height)
 
+        if mode == .simulator {
+            return nil
+        }
+
+        return preferredWindowCropRect(from: attachments, imageRect: imageRect)
+    }
+
+    private static func preferredCropRect(
+        from attachments: [SCStreamFrameInfo: Any]?,
+        imageSize: CGSize,
+        image: CGImage,
+        mode: LiveCaptureMode
+    ) -> CGRect? {
         if mode == .simulator, let simulatorCropRect = simulatorDeviceCropRect(in: image) {
+            let imageRect = CGRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height)
             return simulatorCropRect.intersection(imageRect)
         }
 
+        guard let attachments else { return nil }
+        return preferredWindowCropRect(
+            from: attachments,
+            imageRect: CGRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height)
+        )
+    }
+
+    private static func preferredWindowCropRect(
+        from attachments: [SCStreamFrameInfo: Any],
+        imageRect: CGRect
+    ) -> CGRect? {
         let contentScale = numberValue(attachments[SCStreamFrameInfo.contentScale]) ?? 1
         let scaleFactor = numberValue(attachments[SCStreamFrameInfo.scaleFactor]) ?? 1
 
@@ -265,6 +507,23 @@ extension LiveWindowCaptureService: SCStreamOutput {
         }
 
         return nil
+    }
+
+    private static func screenFrame(
+        from attachments: [SCStreamFrameInfo: Any]?,
+        fallbackScreenFrame: CGRect?,
+        imageSize: CGSize
+    ) -> CGRect {
+        rectValue(attachments?[SCStreamFrameInfo.screenRect]) ?? fallbackScreenFrame ?? CGRect(
+            x: 0,
+            y: 0,
+            width: imageSize.width,
+            height: imageSize.height
+        )
+    }
+
+    private static func milliseconds(from start: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
     private static func scaleCandidates(

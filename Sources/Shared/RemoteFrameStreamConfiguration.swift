@@ -21,5 +21,14 @@ enum RemoteFrameStreamConfiguration {
     static let maxCapturePixelDimension = 2_560
     static let maxCapturePixels = 4_000_000
     static let videoBitRate = 8_000_000
+    static let minimumAdaptiveVideoBitRate = 1_200_000
+    static let maximumAdaptiveVideoBitRate = 10_000_000
+    static let videoQuality = 0.72
+    static let minimumAdaptiveVideoQuality = 0.42
+    static let maximumAdaptiveVideoQuality = 0.76
+    static let minimumAdaptiveFrameRate = 12.0
+    static let maximumAdaptiveFrameRate = 30.0
     static let videoKeyFrameInterval = 60
+    static let backpressureKeyFrameRequestInterval = 1.0
+    static let enablesDirectCapturePixelBufferEncoding = true
 }

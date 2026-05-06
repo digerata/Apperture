@@ -100,6 +100,7 @@ final class HostModel: ObservableObject {
         }
 
         streamStatus = .starting(window.displayTitle)
+        let captureMode: LiveCaptureMode = window.isLikelySimulator ? .simulator : .window
         frameServer.resetVideoStream()
         if let wallpaper = wallpaperService.wallpaperImage(for: window) {
             frameServer.publishWallpaper(wallpaper)
@@ -107,14 +108,22 @@ final class HostModel: ObservableObject {
 
         Task {
             do {
+                if let bootstrapFrame = await LiveWindowCaptureService.bootstrapFrame(for: window, mode: captureMode) {
+                    liveFrame = bootstrapFrame.previewImage
+                    latestCaptureScreenFrame = bootstrapFrame.screenFrame
+                    frameServer.publish(bootstrapFrame, includeAlphaMask: window.isLikelySimulator)
+                }
+
                 try await liveCaptureService.start(
                     windowID: window.id,
-                    mode: window.isLikelySimulator ? .simulator : .window,
+                    mode: captureMode,
                     onFrame: { [weak self] frame in
                         Task { @MainActor in
-                            self?.liveFrame = frame.image
+                            if let image = frame.previewImage {
+                                self?.liveFrame = image
+                            }
                             self?.latestCaptureScreenFrame = frame.screenFrame
-                            self?.frameServer.publish(frame.image, includeAlphaMask: window.isLikelySimulator)
+                            self?.frameServer.publish(frame, includeAlphaMask: window.isLikelySimulator)
                             self?.streamStatus = .live(window.displayTitle)
                         }
                     },
@@ -170,6 +179,8 @@ final class HostModel: ObservableObject {
         case .selectWindow:
             guard let windowID = message.windowID else { return }
             selectRemoteWindow(windowID)
+        case .requestKeyFrame:
+            return
         default:
             guard let window = selectedWindow else { return }
             inputInjectionService.perform(message, in: window, targetFrame: latestCaptureScreenFrame)
@@ -199,10 +210,13 @@ final class HostModel: ObservableObject {
             .map { window in
                 RemoteWindowSummary(
                     id: window.id,
-                    title: window.displayTitle,
-                    subtitle: window.subtitle,
+                    title: window.windowListTitle,
+                    subtitle: window.windowListSubtitle,
                     isSelected: window.id == selectedWindowID,
-                    isSimulator: window.isLikelySimulator
+                    isSimulator: window.isLikelySimulator,
+                    appName: window.applicationName,
+                    appBundleIdentifier: window.applicationBundleIdentifier,
+                    appIconPNGData: window.applicationIconPNGData
                 )
             }
         )

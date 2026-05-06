@@ -20,6 +20,10 @@ final class RemoteInputInjectionService {
         case .pointerUp:
             postMouseEvent(type: .leftMouseUp, at: point, clickState: 1)
             isPointerDown = false
+        case .scroll:
+            prepareTargetForScroll(currentWindow, at: point)
+            postMouseEvent(type: .mouseMoved, at: point, clickState: 0)
+            postScroll(deltaX: message.scrollDeltaX, deltaY: message.scrollDeltaY)
         case .textInput:
             guard let text = message.text, !text.isEmpty else { return }
             prepareTargetForKeyboardInput(currentWindow)
@@ -28,7 +32,7 @@ final class RemoteInputInjectionService {
             guard let key = message.key else { return }
             prepareTargetForKeyboardInput(currentWindow)
             postKey(key)
-        case .requestWindowList, .selectWindow:
+        case .requestWindowList, .selectWindow, .requestKeyFrame:
             return
         }
     }
@@ -79,6 +83,11 @@ final class RemoteInputInjectionService {
         AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
+    }
+
+    private func prepareTargetForScroll(_ window: MirrorWindow, at point: CGPoint) {
+        guard needsFocusRepair(window, at: point) else { return }
+        bringTargetForward(window)
     }
 
     private func refreshedWindow(_ window: MirrorWindow) -> MirrorWindow {
@@ -188,6 +197,27 @@ final class RemoteInputInjectionService {
 
         event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
         event.setIntegerValueField(.mouseEventClickState, value: clickState)
+        event.post(tap: .cghidEventTap)
+    }
+
+    private func postScroll(deltaX: Double, deltaY: Double) {
+        let verticalDelta = Int32(max(min(deltaY, 320), -320))
+        let horizontalDelta = Int32(max(min(deltaX, 320), -320))
+        guard verticalDelta != 0 || horizontalDelta != 0,
+              let event = CGEvent(
+                scrollWheelEvent2Source: eventSource,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: verticalDelta,
+                wheel2: horizontalDelta,
+                wheel3: 0
+              ) else {
+            return
+        }
+
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(verticalDelta))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(horizontalDelta))
         event.post(tap: .cghidEventTap)
     }
 

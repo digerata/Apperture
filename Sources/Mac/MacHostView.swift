@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MacHostView: View {
@@ -44,9 +45,17 @@ struct MacHostView: View {
 
             Divider()
 
-            List(hostModel.windows, selection: $hostModel.selectedWindowID) { window in
-                WindowRow(window: window)
-                    .tag(window.id)
+            List(selection: $hostModel.selectedWindowID) {
+                ForEach(ApplicationWindowGroup.make(from: hostModel.windows)) { group in
+                    Section {
+                        ForEach(group.windows) { window in
+                            WindowRow(window: window)
+                                .tag(window.id)
+                        }
+                    } header: {
+                        ApplicationGroupHeader(group: group)
+                    }
+                }
             }
             .listStyle(.sidebar)
         }
@@ -244,20 +253,108 @@ private struct PermissionRow: View {
     }
 }
 
+private struct ApplicationWindowGroup: Identifiable {
+    var id: String
+    var name: String
+    var iconPNGData: Data?
+    var windows: [MirrorWindow]
+
+    var containsSimulator: Bool {
+        windows.contains(where: \.isLikelySimulator)
+    }
+
+    static func make(from windows: [MirrorWindow]) -> [ApplicationWindowGroup] {
+        Dictionary(grouping: windows) { $0.applicationGroupID }
+            .values
+            .map { windows in
+                let sortedWindows = windows.sorted { lhs, rhs in
+                    lhs.windowListTitle.localizedCaseInsensitiveCompare(rhs.windowListTitle) == .orderedAscending
+                }
+                let firstWindow = sortedWindows[0]
+                return ApplicationWindowGroup(
+                    id: firstWindow.applicationGroupID,
+                    name: firstWindow.applicationName,
+                    iconPNGData: sortedWindows.first(where: { $0.applicationIconPNGData != nil })?.applicationIconPNGData,
+                    windows: sortedWindows
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.containsSimulator != rhs.containsSimulator {
+                    return lhs.containsSimulator
+                }
+
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+}
+
+private struct ApplicationGroupHeader: View {
+    var group: ApplicationWindowGroup
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ApplicationIconView(
+                iconPNGData: group.iconPNGData,
+                fallbackSystemName: group.containsSimulator ? "iphone.gen3" : "app.fill",
+                size: 18
+            )
+
+            Text(group.name)
+                .font(.system(size: 11, weight: .semibold))
+
+            Spacer()
+
+            if group.windows.count > 1 {
+                Text("\(group.windows.count)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .textCase(nil)
+    }
+}
+
+private struct ApplicationIconView: View {
+    var iconPNGData: Data?
+    var fallbackSystemName: String
+    var size: CGFloat
+
+    var body: some View {
+        Group {
+            if let nsImage {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: fallbackSystemName)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private var nsImage: NSImage? {
+        guard let iconPNGData else { return nil }
+        return NSImage(data: iconPNGData)
+    }
+}
+
 private struct WindowRow: View {
     var window: MirrorWindow
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Image(systemName: window.targetKind.symbolName)
                 .foregroundStyle(window.isLikelySimulator ? .blue : .secondary)
-                .frame(width: 24)
+                .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(window.displayTitle)
+                Text(window.windowListTitle)
                     .lineLimit(1)
 
-                Text(window.subtitle)
+                Text(window.windowListSubtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
