@@ -100,6 +100,7 @@ final class HostModel: ObservableObject {
         }
 
         streamStatus = .starting(window.displayTitle)
+        frameServer.resetVideoStream()
         if let wallpaper = wallpaperService.wallpaperImage(for: window) {
             frameServer.publishWallpaper(wallpaper)
         }
@@ -113,7 +114,7 @@ final class HostModel: ObservableObject {
                         Task { @MainActor in
                             self?.liveFrame = frame.image
                             self?.latestCaptureScreenFrame = frame.screenFrame
-                            self?.frameServer.publish(frame.image)
+                            self?.frameServer.publish(frame.image, includeAlphaMask: window.isLikelySimulator)
                             self?.streamStatus = .live(window.displayTitle)
                         }
                     },

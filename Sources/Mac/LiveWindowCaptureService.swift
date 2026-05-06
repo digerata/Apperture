@@ -180,15 +180,15 @@ extension LiveWindowCaptureService: SCStreamOutput {
         )
 
         guard let cropRect = preferredCropRect(from: attachments, image: image, mode: mode) else {
-            return LiveCaptureFrame(image: image, screenFrame: screenFrame)
+            return LiveCaptureFrame(image: materializedCopy(of: image) ?? image, screenFrame: screenFrame)
         }
 
         guard let croppedImage = image.cropping(to: cropRect.integral) else {
-            return LiveCaptureFrame(image: image, screenFrame: screenFrame)
+            return LiveCaptureFrame(image: materializedCopy(of: image) ?? image, screenFrame: screenFrame)
         }
         let outputImage = mode == .simulator
             ? transparentEdgeBackground(in: croppedImage) ?? croppedImage
-            : croppedImage
+            : materializedCopy(of: croppedImage) ?? croppedImage
 
         let xScale = screenFrame.width > 0 ? CGFloat(image.width) / screenFrame.width : 1
         let yScale = screenFrame.height > 0 ? CGFloat(image.height) / screenFrame.height : 1
@@ -200,6 +200,29 @@ extension LiveWindowCaptureService: SCStreamOutput {
         )
 
         return LiveCaptureFrame(image: outputImage, screenFrame: croppedScreenFrame)
+    }
+
+    private static func materializedCopy(of image: CGImage) -> CGImage? {
+        let width = image.width
+        let height = image.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     private static func preferredCropRect(

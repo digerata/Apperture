@@ -11,11 +11,15 @@
 		068AD539B99E8C19A2D11B2A /* RemoteControlMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */; };
 		0EECB8D0A7CC8B659DBD5183 /* MacHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118635A423B2D5C671F2B700 /* MacHostView.swift */; };
 		21660F004A1BA9156F2BE9E3 /* AppertureiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */; };
+		2C443664E333FB45F11E1746 /* RemoteVideoMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */; };
+		3E6DCE9AE39F4481BC01672F /* RemoteVideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ACF0CBF381379D651271968 /* RemoteVideoEncoder.swift */; };
+		5BEE8011094E7A3E75C0E510 /* RemoteVideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFBF03B4BB057330F2A54409 /* RemoteVideoDecoder.swift */; };
 		5C78E0DCD1D9DDBA4E705DC9 /* RemoteInputInjectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */; };
 		5FFC5101E2CD8373594A9057 /* WindowDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */; };
 		70D2E1A265E6D795EA7FE7B8 /* RemoteFrameStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */; };
 		7A7B12810B14781803D8876C /* AppertureMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */; };
 		8419D125F186B9A4F248261E /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 795A9206A21C46C0BAB65DD0 /* Media.xcassets */; };
+		8AA40060B5690C0FC357C412 /* RemoteVideoMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */; };
 		8F4FF7F80754112B14E8F408 /* MirrorLayoutMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */; };
 		99E7F78DBB29EADCEE166271 /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5F1ED9318D52100E54E845C7 /* Media.xcassets */; };
 		99F1158CE409E8521035C331 /* HostSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D8DDB4253648C11A1B14A6 /* HostSettingsView.swift */; };
@@ -45,9 +49,11 @@
 		5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryService.swift; sourceTree = "<group>"; };
 		5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppertureMacApp.swift; sourceTree = "<group>"; };
 		5F1ED9318D52100E54E845C7 /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
+		7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoMessages.swift; sourceTree = "<group>"; };
 		795A9206A21C46C0BAB65DD0 /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
 		79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlMessage.swift; sourceTree = "<group>"; };
 		7A7DC6BCB06273CCD7B1C452 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		7ACF0CBF381379D651271968 /* RemoteVideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoEncoder.swift; sourceTree = "<group>"; };
 		8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorSessionSnapshot.swift; sourceTree = "<group>"; };
 		8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamConfiguration.swift; sourceTree = "<group>"; };
 		9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamClient.swift; sourceTree = "<group>"; };
@@ -61,6 +67,7 @@
 		D290053A2250C9371C1A6F37 /* RemoteFrameStreamServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamServer.swift; sourceTree = "<group>"; };
 		D3D8DDB4253648C11A1B14A6 /* HostSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettingsView.swift; sourceTree = "<group>"; };
 		ECCC377F19F512CCBDE2F480 /* DesktopWallpaperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWallpaperService.swift; sourceTree = "<group>"; };
+		EFBF03B4BB057330F2A54409 /* RemoteVideoDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoDecoder.swift; sourceTree = "<group>"; };
 		EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteInputInjectionService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -73,6 +80,7 @@
 				CE8B97426ABA7CF9C8CF0E32 /* iPhoneViewerView.swift */,
 				5F1ED9318D52100E54E845C7 /* Media.xcassets */,
 				9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */,
+				EFBF03B4BB057330F2A54409 /* RemoteVideoDecoder.swift */,
 			);
 			name = iOS;
 			path = Sources/iOS;
@@ -86,6 +94,7 @@
 				953184A086EFB331049EC963 /* MirrorWindow.swift */,
 				79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */,
 				8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */,
+				7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */,
 				29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */,
 			);
 			name = Shared;
@@ -116,6 +125,7 @@
 				795A9206A21C46C0BAB65DD0 /* Media.xcassets */,
 				D290053A2250C9371C1A6F37 /* RemoteFrameStreamServer.swift */,
 				EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */,
+				7ACF0CBF381379D651271968 /* RemoteVideoEncoder.swift */,
 				5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */,
 			);
 			name = Mac;
@@ -233,6 +243,8 @@
 				C601E3534637B847F12029C2 /* RemoteControlMessage.swift in Sources */,
 				70D2E1A265E6D795EA7FE7B8 /* RemoteFrameStreamClient.swift in Sources */,
 				D2A26E681AA66920122C6BE6 /* RemoteFrameStreamConfiguration.swift in Sources */,
+				5BEE8011094E7A3E75C0E510 /* RemoteVideoDecoder.swift in Sources */,
+				8AA40060B5690C0FC357C412 /* RemoteVideoMessages.swift in Sources */,
 				E00CE58127D97834B26BDEB3 /* RemoteWindowListMessage.swift in Sources */,
 				F5F4C944E94E885BB03C61B7 /* iPhoneViewerView.swift in Sources */,
 			);
@@ -256,6 +268,8 @@
 				EC29B8260AF745E27852E070 /* RemoteFrameStreamConfiguration.swift in Sources */,
 				DA6A7B27549F8FBE4F4E1795 /* RemoteFrameStreamServer.swift in Sources */,
 				5C78E0DCD1D9DDBA4E705DC9 /* RemoteInputInjectionService.swift in Sources */,
+				3E6DCE9AE39F4481BC01672F /* RemoteVideoEncoder.swift in Sources */,
+				2C443664E333FB45F11E1746 /* RemoteVideoMessages.swift in Sources */,
 				FE7C80B64BD4D911AA1BDC3C /* RemoteWindowListMessage.swift in Sources */,
 				5FFC5101E2CD8373594A9057 /* WindowDiscoveryService.swift in Sources */,
 			);

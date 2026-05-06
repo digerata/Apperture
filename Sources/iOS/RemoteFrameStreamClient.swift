@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreMedia
 import Network
 import UIKit
 
@@ -7,10 +8,14 @@ import UIKit
 final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var state: RemoteFrameStreamState = .idle
     @Published private(set) var latestFrame: UIImage?
+    @Published private(set) var videoFrameSize: CGSize?
+    @Published private(set) var latestFrameMask: UIImage?
     @Published private(set) var wallpaper: UIImage?
     @Published private(set) var windows: [RemoteWindowSummary] = []
     @Published private(set) var manualEndpointDescription: String?
     @Published private(set) var diagnostics = RemoteConnectionDiagnostics()
+    @Published private(set) var streamDiagnostics: RemoteStreamDiagnosticsMessage?
+    let videoSampleBuffers = PassthroughSubject<CMSampleBuffer, Never>()
 
     private let queue = DispatchQueue(label: "com.mikewille.Apperture.frame-client")
     private var browser: NWBrowser?
@@ -22,6 +27,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     private var timeoutWorkItem: DispatchWorkItem?
     private var connectedHostName: String?
     private var manualEndpoint: ManualStreamEndpoint?
+    private let videoDecoder = RemoteVideoDecoder()
 
     init() {
         if let savedEndpoint = UserDefaults.standard.string(forKey: Self.manualEndpointDefaultsKey),
@@ -71,8 +77,12 @@ final class RemoteFrameStreamClient: ObservableObject {
         nextCandidateIndex = 0
         connectedHostName = nil
         latestFrame = nil
+        videoFrameSize = nil
+        latestFrameMask = nil
         wallpaper = nil
         windows = []
+        streamDiagnostics = nil
+        videoDecoder.reset()
         state = .idle
         updateDiagnostics { diagnostics in
             diagnostics.browserState = "Stopped"
@@ -111,6 +121,10 @@ final class RemoteFrameStreamClient: ObservableObject {
 
     func clearCurrentFrame() {
         latestFrame = nil
+        videoFrameSize = nil
+        latestFrameMask = nil
+        streamDiagnostics = nil
+        videoDecoder.reset()
     }
 
     @discardableResult
@@ -400,6 +414,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         case .frame:
             guard let image = UIImage(data: Data(imageData)) else { return }
             let hostName = connectedHostName ?? "Mac"
+            videoFrameSize = nil
             latestFrame = image
             state = .live(hostName)
         case .wallpaper:
@@ -410,6 +425,34 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             windows = message.windows
+        case .videoFormat:
+            guard let message = try? JSONDecoder().decode(RemoteVideoFormatMessage.self, from: Data(imageData)) else {
+                return
+            }
+            videoFrameSize = CGSize(width: CGFloat(message.width), height: CGFloat(message.height))
+            videoDecoder.configure(message)
+        case .videoFrame:
+            guard let message = RemoteVideoFrameMessage.decodePayload(Data(imageData)) else {
+                return
+            }
+            videoDecoder.decode(message) { [weak self] sampleBuffer, size in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let hostName = self.connectedHostName ?? "Mac"
+                    if size.width > 0, size.height > 0 {
+                        self.videoFrameSize = size
+                    }
+                    self.videoSampleBuffers.send(sampleBuffer)
+                    self.state = .live(hostName)
+                }
+            }
+        case .videoMask:
+            latestFrameMask = imageData.isEmpty ? nil : UIImage(data: Data(imageData))
+        case .streamDiagnostics:
+            guard let message = try? JSONDecoder().decode(RemoteStreamDiagnosticsMessage.self, from: Data(imageData)) else {
+                return
+            }
+            streamDiagnostics = message
         }
     }
 
@@ -417,6 +460,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         guard let image = UIImage(data: data) else { return }
 
         let hostName = connectedHostName ?? "Mac"
+        videoFrameSize = nil
         latestFrame = image
         state = .live(hostName)
     }
@@ -429,8 +473,12 @@ final class RemoteFrameStreamClient: ObservableObject {
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
         latestFrame = nil
+        videoFrameSize = nil
+        latestFrameMask = nil
         wallpaper = nil
         windows = []
+        streamDiagnostics = nil
+        videoDecoder.reset()
         connection?.cancel()
         connection = nil
         connectedHostName = nil

@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import UIKit
 
@@ -11,11 +12,15 @@ final class iPhoneViewerViewController: UIViewController {
     private let mirrorCanvasView = MirrorCanvasView()
     private let toolbarView = ViewerToolbarView()
     private let keyboardInputView = KeyboardInputView()
+    private let fpsOverlayLabel = UILabel()
     private var currentDefaultLayoutMode: MirrorLayoutMode?
     private var mirrorLeadingConstraint: NSLayoutConstraint?
     private var mirrorTrailingConstraint: NSLayoutConstraint?
     private var mirrorTopConstraint: NSLayoutConstraint?
     private var mirrorBottomConstraint: NSLayoutConstraint?
+    private var frameTimestamps: [CFTimeInterval] = []
+    private var displayedFPS: Double?
+    private var latestStreamDiagnostics: RemoteStreamDiagnosticsMessage?
 
     private var isKeyboardPresented = false {
         didSet {
@@ -67,10 +72,23 @@ final class iPhoneViewerViewController: UIViewController {
         keyboardInputView.alpha = 0.01
         keyboardInputView.isAccessibilityElement = false
 
+        fpsOverlayLabel.translatesAutoresizingMaskIntoConstraints = false
+        fpsOverlayLabel.backgroundColor = UIColor.black.withAlphaComponent(0.48)
+        fpsOverlayLabel.textColor = .white
+        fpsOverlayLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        fpsOverlayLabel.textAlignment = .left
+        fpsOverlayLabel.numberOfLines = 0
+        fpsOverlayLabel.layer.cornerRadius = 7
+        fpsOverlayLabel.layer.cornerCurve = .continuous
+        fpsOverlayLabel.clipsToBounds = true
+        fpsOverlayLabel.text = "FPS --"
+        fpsOverlayLabel.isHidden = true
+
         view.addSubview(fallbackWallpaperView)
         view.addSubview(wallpaperImageView)
         view.addSubview(mirrorCanvasView)
         view.addSubview(toolbarView)
+        view.addSubview(fpsOverlayLabel)
         view.addSubview(keyboardInputView)
 
         let mirrorLeadingConstraint = mirrorCanvasView.leadingAnchor.constraint(equalTo: view.leadingAnchor)
@@ -102,6 +120,11 @@ final class iPhoneViewerViewController: UIViewController {
             toolbarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             toolbarView.topAnchor.constraint(equalTo: view.topAnchor),
             toolbarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            fpsOverlayLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            fpsOverlayLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            fpsOverlayLabel.widthAnchor.constraint(equalToConstant: 176),
+            fpsOverlayLabel.heightAnchor.constraint(equalToConstant: 84),
 
             keyboardInputView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             keyboardInputView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -162,6 +185,31 @@ final class iPhoneViewerViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] image in
                 self?.mirrorCanvasView.image = image
+                self?.recordDisplayedFrame(image)
+            }
+            .store(in: &cancellables)
+
+        streamClient.$videoFrameSize
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] size in
+                self?.mirrorCanvasView.videoSourceSize = size
+            }
+            .store(in: &cancellables)
+
+        streamClient.videoSampleBuffers
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] sampleBuffer in
+                guard let self else { return }
+                if mirrorCanvasView.enqueueVideoSampleBuffer(sampleBuffer) {
+                    recordDisplayedFrame()
+                }
+            }
+            .store(in: &cancellables)
+
+        streamClient.$latestFrameMask
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mask in
+                self?.mirrorCanvasView.maskImage = mask
             }
             .store(in: &cancellables)
 
@@ -197,6 +245,14 @@ final class iPhoneViewerViewController: UIViewController {
                 self?.toolbarView.manualEndpointDescription = endpoint
             }
             .store(in: &cancellables)
+
+        streamClient.$streamDiagnostics
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] diagnostics in
+                self?.latestStreamDiagnostics = diagnostics
+                self?.updateFrameRateOverlay()
+            }
+            .store(in: &cancellables)
     }
 
     private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint) {
@@ -228,9 +284,75 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func selectWindow(_ window: RemoteWindowSummary) {
+        resetFrameRateOverlay()
         streamClient.clearCurrentFrame()
         nextSequenceNumber += 1
         streamClient.send(RemoteControlMessage(selectWindowID: window.id, sequenceNumber: nextSequenceNumber))
+    }
+
+    private func recordDisplayedFrame(_ image: UIImage?) {
+        guard image != nil else {
+            resetFrameRateOverlay()
+            return
+        }
+
+        recordDisplayedFrame()
+    }
+
+    private func recordDisplayedFrame() {
+        let now = CACurrentMediaTime()
+        frameTimestamps.append(now)
+        frameTimestamps.removeAll { now - $0 > 2.0 }
+
+        guard let firstTimestamp = frameTimestamps.first,
+              let lastTimestamp = frameTimestamps.last,
+              lastTimestamp > firstTimestamp,
+              frameTimestamps.count > 1 else {
+            fpsOverlayLabel.text = "FPS --"
+            fpsOverlayLabel.isHidden = false
+            return
+        }
+
+        displayedFPS = Double(frameTimestamps.count - 1) / (lastTimestamp - firstTimestamp)
+        updateFrameRateOverlay()
+    }
+
+    private func resetFrameRateOverlay() {
+        frameTimestamps.removeAll()
+        displayedFPS = nil
+        latestStreamDiagnostics = nil
+        fpsOverlayLabel.text = "FPS --"
+        fpsOverlayLabel.isHidden = true
+    }
+
+    private func updateFrameRateOverlay() {
+        guard displayedFPS != nil || latestStreamDiagnostics != nil else {
+            fpsOverlayLabel.text = "FPS --"
+            fpsOverlayLabel.isHidden = false
+            return
+        }
+
+        let displayFPS = displayedFPS.map { String(format: "%.1f", $0) } ?? "--"
+        guard let diagnostics = latestStreamDiagnostics else {
+            fpsOverlayLabel.text = "Render \(displayFPS) fps"
+            fpsOverlayLabel.isHidden = false
+            return
+        }
+
+        fpsOverlayLabel.text = String(
+            format: "Render %@ fps\nCap %.1f Enc %.1f Send %.1f\n%d x %d  %.1f/%.1f Mbps\nDrop %d  KF %d",
+            displayFPS,
+            diagnostics.captureFPS,
+            diagnostics.encodedFPS,
+            diagnostics.sentFPS,
+            diagnostics.encodedWidth,
+            diagnostics.encodedHeight,
+            diagnostics.bitrateMbps,
+            diagnostics.configuredBitrateMbps,
+            diagnostics.droppedFrames,
+            diagnostics.keyFrameInterval
+        )
+        fpsOverlayLabel.isHidden = false
     }
 
     private func updateDefaultLayoutModeForCurrentSize() {
@@ -633,10 +755,34 @@ private final class ViewerToolbarView: UIView {
 private final class MirrorCanvasView: UIView {
     var image: UIImage? {
         didSet {
+            if image != nil {
+                videoSourceSize = nil
+                videoRenderView.flush()
+            }
             imageView.image = image
-            placeholderView.isHidden = image != nil
-            pointerSurfaceView.imageFrame = image == nil ? nil : imageFrame
+            updateContentVisibility()
             updateScrollableContent(resetOffsetIfNeeded: false)
+        }
+    }
+
+    var videoSourceSize: CGSize? {
+        didSet {
+            if videoSourceSize != nil {
+                if oldValue != videoSourceSize {
+                    videoRenderView.flush()
+                }
+                imageView.image = nil
+            } else {
+                videoRenderView.flush()
+            }
+            updateContentVisibility()
+            updateScrollableContent(resetOffsetIfNeeded: false)
+        }
+    }
+
+    var maskImage: UIImage? {
+        didSet {
+            updateImageMask()
         }
     }
 
@@ -657,7 +803,9 @@ private final class MirrorCanvasView: UIView {
     private let scrollView = TwoFingerScrollView()
     private let contentView = UIView()
     private let shadowView = UIView()
+    private let videoRenderView = VideoRenderView()
     private let imageView = UIImageView()
+    private let imageMaskLayer = CALayer()
     private let pointerSurfaceView = PointerSurfaceView()
     private let placeholderView = StreamPlaceholderView()
     private var lastShadowBounds = CGRect.zero
@@ -696,6 +844,12 @@ private final class MirrorCanvasView: UIView {
         shadowView.layer.shouldRasterize = true
         shadowView.layer.rasterizationScale = UIScreen.main.scale
 
+        videoRenderView.clipsToBounds = true
+        videoRenderView.layer.cornerRadius = 8
+        videoRenderView.layer.cornerCurve = .continuous
+        videoRenderView.isUserInteractionEnabled = false
+        videoRenderView.isHidden = true
+
         imageView.contentMode = .scaleAspectFit
         imageView.clipsToBounds = true
         imageView.layer.cornerRadius = 8
@@ -711,6 +865,7 @@ private final class MirrorCanvasView: UIView {
         addSubview(scrollView)
         scrollView.addSubview(contentView)
         contentView.addSubview(shadowView)
+        contentView.addSubview(videoRenderView)
         contentView.addSubview(imageView)
         contentView.addSubview(pointerSurfaceView)
         addSubview(placeholderView)
@@ -724,6 +879,14 @@ private final class MirrorCanvasView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         updateScrollableContent(resetOffsetIfNeeded: false)
+    }
+
+    @discardableResult
+    func enqueueVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        imageView.image = nil
+        let didEnqueue = videoRenderView.enqueue(sampleBuffer)
+        updateContentVisibility()
+        return didEnqueue
     }
 
     private func updateScrollableContent(resetOffsetIfNeeded: Bool) {
@@ -753,16 +916,18 @@ private final class MirrorCanvasView: UIView {
         scrollView.isDirectionalLockEnabled = true
         contentView.frame = CGRect(origin: .zero, size: contentSize)
         shadowView.frame = frame
+        videoRenderView.frame = frame
         imageView.frame = frame
+        updateImageMask()
         pointerSurfaceView.frame = contentView.bounds
-        pointerSurfaceView.imageFrame = image == nil ? nil : frame
+        pointerSurfaceView.imageFrame = hasContent ? frame : nil
         placeholderView.frame = placeholderRect
 
         if shadowView.bounds != lastShadowBounds {
             lastShadowBounds = shadowView.bounds
             shadowView.layer.shadowPath = UIBezierPath(
                 roundedRect: shadowView.bounds,
-                cornerRadius: imageView.layer.cornerRadius
+                cornerRadius: renderCornerRadius
             ).cgPath
         }
 
@@ -779,6 +944,30 @@ private final class MirrorCanvasView: UIView {
         }
     }
 
+    private func updateImageMask() {
+        imageView.layer.mask = nil
+        videoRenderView.layer.mask = nil
+
+        guard let maskImage, let targetLayer = activeRenderLayer else {
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageMaskLayer.frame = targetLayer.bounds
+        imageMaskLayer.contents = maskImage.cgImage
+        imageMaskLayer.contentsGravity = .resize
+        targetLayer.mask = imageMaskLayer
+        CATransaction.commit()
+    }
+
+    private func updateContentVisibility() {
+        let isDisplayingVideo = videoSourceSize != nil
+        videoRenderView.isHidden = !isDisplayingVideo
+        imageView.isHidden = isDisplayingVideo || imageView.image == nil
+        placeholderView.isHidden = hasContent
+    }
+
     private func clampedContentOffset(_ offset: CGPoint, contentSize: CGSize) -> CGPoint {
         CGPoint(
             x: scrollsHorizontally ? min(max(offset.x, 0), max(contentSize.width - bounds.width, 0)) : 0,
@@ -787,6 +976,10 @@ private final class MirrorCanvasView: UIView {
     }
 
     private var sourceSize: CGSize {
+        if let videoSourceSize, videoSourceSize.width > 0, videoSourceSize.height > 0 {
+            return videoSourceSize
+        }
+
         guard let image, image.size.width > 0, image.size.height > 0 else {
             return CGSize(width: 960, height: 640)
         }
@@ -824,6 +1017,26 @@ private final class MirrorCanvasView: UIView {
             width: size.width,
             height: size.height
         )
+    }
+
+    private var hasContent: Bool {
+        image != nil || videoSourceSize != nil
+    }
+
+    private var activeRenderLayer: CALayer? {
+        if videoSourceSize != nil {
+            return videoRenderView.layer
+        }
+
+        if image != nil {
+            return imageView.layer
+        }
+
+        return nil
+    }
+
+    private var renderCornerRadius: CGFloat {
+        videoRenderView.layer.cornerRadius
     }
 
     private var scrollsHorizontally: Bool {
@@ -878,6 +1091,47 @@ private final class TwoFingerScrollView: UIScrollView, UIGestureRecognizerDelega
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         false
+    }
+}
+
+private final class VideoRenderView: UIView {
+    override class var layerClass: AnyClass {
+        AVSampleBufferDisplayLayer.self
+    }
+
+    private var displayLayer: AVSampleBufferDisplayLayer {
+        layer as! AVSampleBufferDisplayLayer
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        displayLayer.backgroundColor = UIColor.clear.cgColor
+        displayLayer.videoGravity = .resize
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @discardableResult
+    func enqueue(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        if displayLayer.status == .failed {
+            displayLayer.flushAndRemoveImage()
+        }
+
+        if !displayLayer.isReadyForMoreMediaData {
+            displayLayer.flush()
+        }
+
+        guard displayLayer.isReadyForMoreMediaData else { return false }
+        displayLayer.enqueue(sampleBuffer)
+        return true
+    }
+
+    func flush() {
+        displayLayer.flushAndRemoveImage()
     }
 }
 

@@ -7,6 +7,8 @@ enum RemoteFrameStreamConfiguration {
         case windowList = 2
         case videoFormat = 3
         case videoFrame = 4
+        case videoMask = 5
+        case streamDiagnostics = 6
     }
 
     static let bonjourType = "_apperture._tcp"
@@ -14,10 +16,10 @@ enum RemoteFrameStreamConfiguration {
     static let tcpPort: UInt16 = 58224
     static let maxFrameBytes = 24_000_000
     static let maxControlMessageBytes = 4_096
-    static let targetFrameRate = 10.0
+    static let targetFrameRate = 30.0
     static let jpegQuality = 0.48
-    static let maxCapturePixelDimension = 1_600
-    static let maxCapturePixels = 1_600_000
-    static let videoBitRate = 1_200_000
-    static let videoKeyFrameInterval = 30
+    static let maxCapturePixelDimension = 2_560
+    static let maxCapturePixels = 4_000_000
+    static let videoBitRate = 8_000_000
+    static let videoKeyFrameInterval = 60
 }
