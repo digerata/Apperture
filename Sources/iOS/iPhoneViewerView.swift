@@ -401,7 +401,6 @@ final class iPhoneViewerViewController: UIViewController {
         streamClient.$state
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
-                self?.mirrorCanvasView.streamState = state
                 self?.toolbarView.streamState = state
                 if case .connected = state {
                     self?.requestWindowList()
@@ -500,6 +499,7 @@ final class iPhoneViewerViewController: UIViewController {
         selectedWindowIsSimulator = window.isSimulator
         hasSelectedWindowMetadata = true
         updateInputMode()
+        mirrorCanvasView.prepareForAppSwitch()
         streamClient.clearCurrentFrame()
         nextSequenceNumber += 1
         streamClient.send(RemoteControlMessage(selectWindowID: window.id, sequenceNumber: nextSequenceNumber))
@@ -523,8 +523,7 @@ final class iPhoneViewerViewController: UIViewController {
               let lastTimestamp = frameTimestamps.last,
               lastTimestamp > firstTimestamp,
               frameTimestamps.count > 1 else {
-            fpsOverlayLabel.text = "FPS --"
-            fpsOverlayLabel.isHidden = false
+            updateFrameRateOverlay()
             return
         }
 
@@ -1072,43 +1071,58 @@ private struct RemoteApplicationWindowGroup {
     }
 }
 
+private enum MirrorContentTransitionStyle: Equatable {
+    case normal
+    case switching(direction: CGFloat)
+}
+
 private final class MirrorCanvasView: UIView {
     var image: UIImage? {
         didSet {
+            let hadContent = oldValue != nil || videoSourceSize != nil
+            let isDeparting = hadContent && image == nil && videoSourceSize == nil
+
             if image != nil {
+                isSynchronizingRenderMode = true
                 videoSourceSize = nil
+                isSynchronizingRenderMode = false
                 videoRenderView.flush()
             }
-            imageView.image = image
-            updateContentVisibility()
-            updateScrollableContent(resetOffsetIfNeeded: false)
+
+            if !isDeparting {
+                imageView.image = image
+            }
+
+            finishContentUpdate(hadContent: hadContent, isDeparting: isDeparting)
         }
     }
 
     var videoSourceSize: CGSize? {
         didSet {
+            let hadContent = image != nil || oldValue != nil
+            let isDeparting = hadContent && image == nil && videoSourceSize == nil
+
             if videoSourceSize != nil {
                 if oldValue != videoSourceSize {
                     videoRenderView.flush()
                 }
                 imageView.image = nil
-            } else {
+            } else if !isDeparting {
                 videoRenderView.flush()
             }
-            updateContentVisibility()
-            updateScrollableContent(resetOffsetIfNeeded: false)
+
+            if isSynchronizingRenderMode {
+                updateContentVisibility()
+                updateScrollableContent(resetOffsetIfNeeded: false)
+            } else {
+                finishContentUpdate(hadContent: hadContent, isDeparting: isDeparting)
+            }
         }
     }
 
     var maskImage: UIImage? {
         didSet {
             updateImageMask()
-        }
-    }
-
-    var streamState: RemoteFrameStreamState = .idle {
-        didSet {
-            placeholderView.configure(state: streamState)
         }
     }
 
@@ -1123,19 +1137,30 @@ private final class MirrorCanvasView: UIView {
         }
     }
 
+    func prepareForAppSwitch() {
+        nextSwitchDirection *= -1
+        pendingTransitionStyle = .switching(direction: nextSwitchDirection)
+    }
+
     var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
     var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private let scrollView = TwoFingerScrollView()
     private let contentView = UIView()
+    private let renderPivotView = UIView()
+    private let renderSurfaceView = UIView()
     private let shadowView = UIView()
     private let videoRenderView = VideoRenderView()
     private let imageView = UIImageView()
     private let imageMaskLayer = CALayer()
     private let pointerSurfaceView = PointerSurfaceView()
-    private let placeholderView = StreamPlaceholderView()
     private var lastShadowBounds = CGRect.zero
     private var lastContentSize = CGSize.zero
+    private var isSynchronizingRenderMode = false
+    private var isAnimatingDeparture = false
+    private var pendingTransitionStyle: MirrorContentTransitionStyle = .normal
+    private var nextSwitchDirection: CGFloat = 1
+    private var transitionGeneration = 0
     private let viewportPadding: CGFloat = 16
 
     override init(frame: CGRect) {
@@ -1160,6 +1185,19 @@ private final class MirrorCanvasView: UIView {
 
         contentView.backgroundColor = .clear
         contentView.isUserInteractionEnabled = true
+
+        renderPivotView.backgroundColor = .clear
+        renderPivotView.isUserInteractionEnabled = false
+        renderPivotView.layer.anchorPoint = CGPoint(x: 0.5, y: 1)
+        renderPivotView.layer.allowsGroupOpacity = true
+        renderPivotView.layer.isDoubleSided = false
+        renderPivotView.layer.rasterizationScale = UIScreen.main.scale
+
+        renderSurfaceView.backgroundColor = .clear
+        renderSurfaceView.isUserInteractionEnabled = false
+        renderSurfaceView.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        renderSurfaceView.layer.allowsGroupOpacity = true
+        renderSurfaceView.layer.isDoubleSided = false
 
         shadowView.isUserInteractionEnabled = false
         shadowView.backgroundColor = .clear
@@ -1189,15 +1227,14 @@ private final class MirrorCanvasView: UIView {
             self?.onScrollEvent(point, delta, phase)
         }
 
-        placeholderView.isUserInteractionEnabled = false
-
         addSubview(scrollView)
         scrollView.addSubview(contentView)
-        contentView.addSubview(shadowView)
-        contentView.addSubview(videoRenderView)
-        contentView.addSubview(imageView)
+        contentView.addSubview(renderPivotView)
+        renderPivotView.addSubview(renderSurfaceView)
+        renderSurfaceView.addSubview(shadowView)
+        renderSurfaceView.addSubview(videoRenderView)
+        renderSurfaceView.addSubview(imageView)
         contentView.addSubview(pointerSurfaceView)
-        addSubview(placeholderView)
     }
 
     @available(*, unavailable)
@@ -1216,6 +1253,22 @@ private final class MirrorCanvasView: UIView {
         let didEnqueue = videoRenderView.enqueue(sampleBuffer)
         updateContentVisibility()
         return didEnqueue
+    }
+
+    private func finishContentUpdate(hadContent: Bool, isDeparting: Bool) {
+        let hasUpdatedContent = hasContent
+
+        if isDeparting {
+            animateContentDeparture()
+            return
+        }
+
+        updateContentVisibility()
+        updateScrollableContent(resetOffsetIfNeeded: false)
+
+        if !hadContent && hasUpdatedContent {
+            animateContentArrival()
+        }
     }
 
     private func updateScrollableContent(resetOffsetIfNeeded: Bool) {
@@ -1244,13 +1297,20 @@ private final class MirrorCanvasView: UIView {
         scrollView.alwaysBounceVertical = scrollsVertically
         scrollView.isDirectionalLockEnabled = true
         contentView.frame = CGRect(origin: .zero, size: contentSize)
-        shadowView.frame = frame
-        videoRenderView.frame = frame
-        imageView.frame = frame
+        renderPivotView.bounds = CGRect(origin: .zero, size: frame.size)
+        renderPivotView.layer.anchorPoint = CGPoint(x: 0.5, y: 1)
+        renderPivotView.layer.position = CGPoint(x: frame.midX, y: frame.maxY)
+        renderSurfaceView.bounds = renderPivotView.bounds
+        renderSurfaceView.layer.position = CGPoint(
+            x: renderPivotView.bounds.midX,
+            y: renderPivotView.bounds.midY
+        )
+        shadowView.frame = renderSurfaceView.bounds
+        videoRenderView.frame = renderSurfaceView.bounds
+        imageView.frame = renderSurfaceView.bounds
         updateImageMask()
         pointerSurfaceView.frame = contentView.bounds
         pointerSurfaceView.imageFrame = hasContent ? frame : nil
-        placeholderView.frame = placeholderRect
 
         if shadowView.bounds != lastShadowBounds {
             lastShadowBounds = shadowView.bounds
@@ -1274,6 +1334,8 @@ private final class MirrorCanvasView: UIView {
     }
 
     private func updateImageMask() {
+        guard !isAnimatingDeparture else { return }
+
         imageView.layer.mask = nil
         videoRenderView.layer.mask = nil
 
@@ -1292,9 +1354,164 @@ private final class MirrorCanvasView: UIView {
 
     private func updateContentVisibility() {
         let isDisplayingVideo = videoSourceSize != nil
+        renderPivotView.isHidden = !hasContent
+        renderSurfaceView.isHidden = !hasContent
         videoRenderView.isHidden = !isDisplayingVideo
         imageView.isHidden = isDisplayingVideo || imageView.image == nil
-        placeholderView.isHidden = hasContent
+    }
+
+    private func animateContentArrival() {
+        transitionGeneration += 1
+        let generation = transitionGeneration
+        let style = pendingTransitionStyle
+        let reducedMotion = UIAccessibility.isReduceMotionEnabled
+
+        renderPivotView.isHidden = false
+        renderSurfaceView.isHidden = false
+        applyLayerState(
+            to: renderPivotView,
+            alpha: 0,
+            transform: reducedMotion ? CATransform3DIdentity : bottomHingeTransform(for: style)
+        )
+        applyAffineState(
+            to: renderSurfaceView,
+            alpha: 1,
+            transform: reducedMotion ? .identity : CGAffineTransform(scaleX: 0.6, y: 0.6)
+        )
+        pointerSurfaceView.isUserInteractionEnabled = false
+
+        UIView.animate(
+            withDuration: reducedMotion ? 0.18 : arrivalDuration(for: style),
+            delay: 0,
+            options: [.curveEaseInOut, .allowUserInteraction],
+            animations: {
+                self.renderPivotView.alpha = 1
+                self.renderPivotView.layer.transform = CATransform3DIdentity
+                self.renderSurfaceView.transform = .identity
+            },
+            completion: { _ in
+                guard generation == self.transitionGeneration else { return }
+                self.renderPivotView.alpha = 1
+                self.renderPivotView.layer.transform = CATransform3DIdentity
+                self.renderSurfaceView.alpha = 1
+                self.renderSurfaceView.transform = .identity
+                self.pointerSurfaceView.isUserInteractionEnabled = true
+                self.pendingTransitionStyle = .normal
+                self.updateContentVisibility()
+            }
+        )
+    }
+
+    private func animateContentDeparture() {
+        transitionGeneration += 1
+        let generation = transitionGeneration
+        let style = pendingTransitionStyle
+        let reducedMotion = UIAccessibility.isReduceMotionEnabled
+
+        isAnimatingDeparture = true
+        applyLayerState(
+            to: renderPivotView,
+            alpha: renderPivotView.alpha,
+            transform: CATransform3DIdentity
+        )
+        applyAffineState(to: renderSurfaceView, alpha: 1, transform: .identity)
+        setRenderRasterizationEnabled(true)
+        pointerSurfaceView.isUserInteractionEnabled = false
+
+        guard !renderPivotView.isHidden else {
+            guard generation == transitionGeneration else { return }
+            isAnimatingDeparture = false
+            clearDepartedContent()
+            setRenderRasterizationEnabled(false)
+            pointerSurfaceView.isUserInteractionEnabled = true
+            updateContentVisibility()
+            updateScrollableContent(resetOffsetIfNeeded: false)
+            return
+        }
+
+        UIView.animate(
+            withDuration: reducedMotion ? 0.16 : departureDuration(for: style),
+            delay: 0,
+            options: [.curveEaseInOut, .allowUserInteraction],
+            animations: {
+                self.renderPivotView.alpha = 0
+                self.renderPivotView.layer.transform = reducedMotion ? CATransform3DIdentity : self.bottomHingeTransform(for: style)
+                self.renderSurfaceView.transform = reducedMotion ? .identity : CGAffineTransform(scaleX: 0.8, y: 0.8)
+            },
+            completion: { _ in
+                guard generation == self.transitionGeneration else {
+                    self.isAnimatingDeparture = false
+                    self.setRenderRasterizationEnabled(false)
+                    self.updateImageMask()
+                    return
+                }
+                self.isAnimatingDeparture = false
+                self.clearDepartedContent()
+                self.renderPivotView.alpha = 1
+                self.renderPivotView.layer.transform = CATransform3DIdentity
+                self.renderSurfaceView.alpha = 1
+                self.renderSurfaceView.transform = .identity
+                self.setRenderRasterizationEnabled(false)
+                self.pointerSurfaceView.isUserInteractionEnabled = true
+                self.updateContentVisibility()
+                self.updateScrollableContent(resetOffsetIfNeeded: false)
+            }
+        )
+    }
+
+    private func clearDepartedContent() {
+        imageView.image = nil
+        videoRenderView.flush()
+        updateImageMask()
+    }
+
+    private func setRenderRasterizationEnabled(_ isEnabled: Bool) {
+        renderPivotView.layer.shouldRasterize = isEnabled
+    }
+
+    private func applyLayerState(to view: UIView, alpha: CGFloat, transform: CATransform3D) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        view.alpha = alpha
+        view.transform = .identity
+        view.layer.transform = transform
+        CATransaction.commit()
+    }
+
+    private func applyAffineState(to view: UIView, alpha: CGFloat, transform: CGAffineTransform) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        view.alpha = alpha
+        view.layer.transform = CATransform3DIdentity
+        view.transform = transform
+        CATransaction.commit()
+    }
+
+    private func bottomHingeTransform(for style: MirrorContentTransitionStyle) -> CATransform3D {
+        let angle: CGFloat
+
+        switch style {
+        case .normal, .switching:
+            angle = 25 * .pi / 180
+        }
+
+        var transform = CATransform3DIdentity
+        transform.m34 = -1 / 700
+        return CATransform3DRotate(transform, angle, 1, 0, 0)
+    }
+
+    private func arrivalDuration(for style: MirrorContentTransitionStyle) -> TimeInterval {
+        switch style {
+        case .normal, .switching:
+            return 0.25
+        }
+    }
+
+    private func departureDuration(for style: MirrorContentTransitionStyle) -> TimeInterval {
+        switch style {
+        case .normal, .switching:
+            return 0.25
+        }
     }
 
     private func clampedContentOffset(_ offset: CGPoint, contentSize: CGSize) -> CGPoint {
@@ -1321,16 +1538,6 @@ private final class MirrorCanvasView: UIView {
             sourceSize: sourceSize,
             availableSize: bounds.size,
             layoutMode: layoutMode
-        )
-    }
-
-    private var placeholderRect: CGRect {
-        ViewerGeometry.frameRect(
-            sourceSize: CGSize(width: 960, height: 640),
-            availableSize: bounds.size,
-            layoutMode: layoutMode,
-            panOffset: .zero,
-            startsAtLeadingEdge: true
         )
     }
 
@@ -1803,70 +2010,6 @@ private final class PointerSurfaceView: UIView {
 private struct ScrollSample {
     var time: TimeInterval
     var location: CGPoint
-}
-
-private final class StreamPlaceholderView: UIView {
-    private let iconView = UIImageView(image: UIImage(systemName: "display.trianglebadge.exclamationmark"))
-    private let titleLabel = UILabel()
-    private let detailLabel = UILabel()
-    private let contentStackView = UIStackView()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        configureSubviews()
-        configure(state: .idle)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func configure(state: RemoteFrameStreamState) {
-        titleLabel.text = state.title
-        detailLabel.text = state.detail
-    }
-
-    private func configureSubviews() {
-        backgroundColor = UIColor.black.withAlphaComponent(0.34)
-        layer.cornerRadius = 8
-        layer.cornerCurve = .continuous
-        layer.borderWidth = 1
-        layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
-
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.tintColor = .white
-        iconView.contentMode = .scaleAspectFit
-        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 34, weight: .regular)
-
-        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
-        titleLabel.textColor = .white
-        titleLabel.textAlignment = .center
-
-        detailLabel.font = .systemFont(ofSize: 13, weight: .regular)
-        detailLabel.textColor = UIColor.white.withAlphaComponent(0.68)
-        detailLabel.textAlignment = .center
-        detailLabel.numberOfLines = 2
-
-        contentStackView.translatesAutoresizingMaskIntoConstraints = false
-        contentStackView.axis = .vertical
-        contentStackView.alignment = .center
-        contentStackView.spacing = 8
-        contentStackView.addArrangedSubview(iconView)
-        contentStackView.addArrangedSubview(titleLabel)
-        contentStackView.addArrangedSubview(detailLabel)
-
-        addSubview(contentStackView)
-
-        NSLayoutConstraint.activate([
-            iconView.widthAnchor.constraint(equalToConstant: 42),
-            iconView.heightAnchor.constraint(equalToConstant: 42),
-            contentStackView.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20),
-            contentStackView.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20),
-            contentStackView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            contentStackView.centerYAnchor.constraint(equalTo: centerYAnchor)
-        ])
-    }
 }
 
 private final class KeyboardInputView: UIView, UIKeyInput {

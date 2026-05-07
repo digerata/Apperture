@@ -140,8 +140,12 @@ final class RemoteFrameStreamServer {
             self.resetDiagnosticsWindow()
             self.videoEncoder.invalidate()
 
+            let resetPacket = Self.makeEmptyPacket(type: .streamReset)
             guard let maskPacket = Self.makeEmptyMaskPacket() else { return }
             for id in self.readyConnectionIDs {
+                if let resetPacket {
+                    self.send(resetPacket, to: id)
+                }
                 self.send(maskPacket, to: id)
             }
         }
@@ -695,7 +699,7 @@ final class RemoteFrameStreamServer {
             encodedData = image.hasAlpha ? makePNGData(from: image) : makeJPEGData(from: image)
         case .wallpaper:
             encodedData = makeJPEGData(from: image)
-        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity:
+        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset:
             return nil
         }
 
@@ -732,6 +736,16 @@ final class RemoteFrameStreamServer {
         var payload = Data([type.rawValue])
         payload.append(encodedData)
 
+        var length = UInt32(payload.count).bigEndian
+        var packet = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        packet.append(payload)
+        return packet
+    }
+
+    private static func makeEmptyPacket(type: RemoteFrameStreamConfiguration.PacketType) -> Data? {
+        guard type == .streamReset else { return nil }
+
+        let payload = Data([type.rawValue])
         var length = UInt32(payload.count).bigEndian
         var packet = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
         packet.append(payload)

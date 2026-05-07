@@ -145,6 +145,9 @@ final class HostModel: ObservableObject {
                     },
                     onStop: { [weak self] error in
                         Task { @MainActor in
+                            self?.liveFrame = nil
+                            self?.latestCaptureScreenFrame = nil
+                            self?.frameServer.resetVideoStream()
                             self?.streamStatus = .failed(error.localizedDescription)
                         }
                     }
@@ -156,6 +159,8 @@ final class HostModel: ObservableObject {
                 streamStatus = .live(window.displayTitle)
             } catch {
                 liveFrame = nil
+                latestCaptureScreenFrame = nil
+                frameServer.resetVideoStream()
                 refreshPermissions()
                 streamStatus = .failed(error.localizedDescription)
             }
@@ -167,6 +172,7 @@ final class HostModel: ObservableObject {
             await liveCaptureService.stop()
             liveFrame = nil
             latestCaptureScreenFrame = nil
+            frameServer.resetVideoStream()
             streamStatus = .idle
         }
     }

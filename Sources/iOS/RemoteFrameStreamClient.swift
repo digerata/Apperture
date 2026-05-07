@@ -483,6 +483,10 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             developerActivity.apply(event)
+        case .streamReset:
+            clearCurrentFrame()
+            state = .connected(connectedHostName ?? "Mac")
+            recordDiagnosticEvent("Remote stream reset.")
         }
     }
 
