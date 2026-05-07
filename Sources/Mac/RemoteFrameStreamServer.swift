@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreVideo
+import Darwin
 import Foundation
 import ImageIO
 import Network
@@ -22,6 +23,7 @@ final class RemoteFrameStreamServer {
     private var videoMaskSize = CGSize.zero
     private var wallpaperPacket: Data?
     private var windowListPacket: Data?
+    private var appIconPackets: [String: Data] = [:]
     private var developerActivityPacket: Data?
     private var streamGeneration: UInt64 = 0
     private var lastBackpressureKeyFrameRequestTime: CFAbsoluteTime = 0
@@ -155,6 +157,17 @@ final class RemoteFrameStreamServer {
         queue.async {
             guard let packet = Self.makeWindowListPacket(windows) else { return }
             self.windowListPacket = packet
+
+            for id in self.readyConnectionIDs {
+                self.send(packet, to: id)
+            }
+        }
+    }
+
+    func publishApplicationIcon(_ message: RemoteAppIconMessage) {
+        queue.async {
+            guard let packet = Self.makePacket(type: .appIcon, message: message) else { return }
+            self.appIconPackets[message.appGroupID] = packet
 
             for id in self.readyConnectionIDs {
                 self.send(packet, to: id)
@@ -319,11 +332,17 @@ final class RemoteFrameStreamServer {
             readyConnectionIDs.insert(id)
             publishStatus()
             receiveControlLength(from: id)
+            if let hostInfoPacket = Self.makePacket(type: .hostInfo, message: Self.hostInfoMessage) {
+                send(hostInfoPacket, to: id)
+            }
             if let wallpaperPacket {
                 send(wallpaperPacket, to: id)
             }
             if let windowListPacket {
                 send(windowListPacket, to: id)
+            }
+            for packet in appIconPackets.values {
+                send(packet, to: id)
             }
             if let developerActivityPacket {
                 send(developerActivityPacket, to: id)
@@ -699,7 +718,7 @@ final class RemoteFrameStreamServer {
             encodedData = image.hasAlpha ? makePNGData(from: image) : makeJPEGData(from: image)
         case .wallpaper:
             encodedData = makeJPEGData(from: image)
-        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset:
+        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon:
             return nil
         }
 
@@ -891,6 +910,26 @@ final class RemoteFrameStreamServer {
     private static var serviceName: String {
         let hostName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         return "Apperture \(hostName)"
+    }
+
+    private static var hostInfoMessage: RemoteHostInfoMessage {
+        let displayName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        return RemoteHostInfoMessage(
+            displayName: displayName,
+            hostName: ProcessInfo.processInfo.hostName,
+            modelIdentifier: hardwareModelIdentifier(),
+            symbolName: "macbook"
+        )
+    }
+
+    private static func hardwareModelIdentifier() -> String? {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        guard size > 0 else { return nil }
+
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
+        return String(cString: buffer)
     }
 
     private static func listenerFailureMessage(for error: Error) -> String {

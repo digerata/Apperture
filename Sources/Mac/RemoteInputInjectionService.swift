@@ -36,7 +36,7 @@ final class RemoteInputInjectionService {
             guard let key = message.key else { return }
             prepareTargetForKeyboardInput(currentWindow)
             postKey(key)
-        case .requestWindowList, .selectWindow, .requestKeyFrame:
+        case .requestWindowList, .selectWindow, .startStream, .requestKeyFrame:
             return
         }
     }

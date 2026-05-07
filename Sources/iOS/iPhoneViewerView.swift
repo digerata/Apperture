@@ -135,6 +135,9 @@ final class iPhoneViewerViewController: UIViewController {
     private let fallbackWallpaperView = FallbackWallpaperView()
     private let wallpaperImageView = UIImageView()
     private let mirrorCanvasView = MirrorCanvasView()
+    private let hostConnectionView = HostConnectionOverlayView()
+    private let appLauncherView = AppLauncherOverlayView()
+    private let loadingInterstitialView = LoadingInterstitialView()
     private let toolbarView = ViewerToolbarView()
     private let keyboardInputView = KeyboardInputView()
     private let fpsOverlayLabel = PaddedLabel()
@@ -153,6 +156,13 @@ final class iPhoneViewerViewController: UIViewController {
     private var selectedWindowIsSimulator = false
     private var hasSelectedWindowMetadata = false
     private var currentFrameHasAlphaMask = false
+    private var hasRequestedStreamForCurrentConnection = false
+    private var isAppLauncherPresented = false
+    private var isWaitingForSelectedStream = false
+    private var isDismissingLauncherForSelectedStream = false
+    private var hasPendingSelectedStreamFrame = false
+    private var isAwaitingWindowList = false
+    private var recentAppIDs = UserDefaults.standard.stringArray(forKey: "RecentMirroredAppIDs") ?? []
     private var isVideoDebugEnabled = UserDefaults.standard.bool(forKey: "VideoDebugOverlayEnabled") {
         didSet {
             UserDefaults.standard.set(isVideoDebugEnabled, forKey: "VideoDebugOverlayEnabled")
@@ -205,6 +215,15 @@ final class iPhoneViewerViewController: UIViewController {
         mirrorCanvasView.translatesAutoresizingMaskIntoConstraints = false
         mirrorCanvasView.layoutMode = .fitHeight
 
+        hostConnectionView.translatesAutoresizingMaskIntoConstraints = false
+        hostConnectionView.isHidden = true
+
+        appLauncherView.translatesAutoresizingMaskIntoConstraints = false
+        appLauncherView.isHidden = true
+
+        loadingInterstitialView.translatesAutoresizingMaskIntoConstraints = false
+        loadingInterstitialView.isHidden = true
+
         toolbarView.translatesAutoresizingMaskIntoConstraints = false
         toolbarView.isVideoDebugEnabled = isVideoDebugEnabled
 
@@ -230,6 +249,9 @@ final class iPhoneViewerViewController: UIViewController {
         view.addSubview(fallbackWallpaperView)
         view.addSubview(wallpaperImageView)
         view.addSubview(mirrorCanvasView)
+        view.addSubview(hostConnectionView)
+        view.addSubview(appLauncherView)
+        view.addSubview(loadingInterstitialView)
         view.addSubview(toolbarView)
         view.addSubview(developerActivityBannerView)
         view.addSubview(fpsOverlayLabel)
@@ -275,6 +297,21 @@ final class iPhoneViewerViewController: UIViewController {
             mirrorTopConstraint,
             mirrorBottomConstraint,
 
+            hostConnectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hostConnectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hostConnectionView.topAnchor.constraint(equalTo: view.topAnchor),
+            hostConnectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            appLauncherView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            appLauncherView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            appLauncherView.topAnchor.constraint(equalTo: view.topAnchor),
+            appLauncherView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            loadingInterstitialView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            loadingInterstitialView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            loadingInterstitialView.topAnchor.constraint(equalTo: view.topAnchor),
+            loadingInterstitialView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
             toolbarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             toolbarView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -309,11 +346,30 @@ final class iPhoneViewerViewController: UIViewController {
             self?.setLayoutMode(layoutMode)
         }
 
-        toolbarView.onRequestWindowList = { [weak self] in
+        toolbarView.onAppLauncherTapped = { [weak self] in
+            self?.presentAppLauncherFromToolbar()
+        }
+
+        hostConnectionView.onHostSelected = { [weak self] host in
+            self?.streamClient.connect(toHostID: host.id)
+        }
+
+        hostConnectionView.onManualConnectRequested = { [weak self] host, _, _ in
+            guard let self else { return }
+            if let errorMessage = streamClient.connectManually(to: host) {
+                presentManualConnectError(errorMessage)
+            }
+        }
+
+        hostConnectionView.onDiagnosticsTapped = { [weak self] in
+            self?.presentConnectionDiagnostics()
+        }
+
+        appLauncherView.onRefreshTapped = { [weak self] in
             self?.requestWindowList()
         }
 
-        toolbarView.onWindowSelected = { [weak self] window in
+        appLauncherView.onWindowSelected = { [weak self] window in
             self?.selectWindow(window)
         }
 
@@ -330,6 +386,10 @@ final class iPhoneViewerViewController: UIViewController {
             self?.streamClient.forgetManualEndpoint()
         }
 
+        toolbarView.onDisconnectTapped = { [weak self] in
+            self?.disconnectFromHost()
+        }
+
         toolbarView.onDiagnosticsTapped = { [weak self] in
             self?.presentConnectionDiagnostics()
         }
@@ -337,10 +397,6 @@ final class iPhoneViewerViewController: UIViewController {
         toolbarView.onVideoDebugToggled = { [weak self] in
             guard let self else { return }
             isVideoDebugEnabled.toggle()
-        }
-
-        toolbarView.onExitTapped = { [weak self] in
-            self?.toggleStreamConnection()
         }
 
         keyboardInputView.onTextInput = { [weak self] text in
@@ -358,6 +414,9 @@ final class iPhoneViewerViewController: UIViewController {
             .sink { [weak self] image in
                 self?.mirrorCanvasView.image = image
                 self?.recordDisplayedFrame(image)
+                if image != nil {
+                    self?.handleSelectedStreamFrameReady()
+                }
             }
             .store(in: &cancellables)
 
@@ -374,6 +433,7 @@ final class iPhoneViewerViewController: UIViewController {
                 guard let self else { return }
                 if mirrorCanvasView.enqueueVideoSampleBuffer(sampleBuffer) {
                     recordDisplayedFrame()
+                    handleSelectedStreamFrameReady()
                 } else {
                     streamClient.requestKeyFrameIfNeeded()
                 }
@@ -401,10 +461,16 @@ final class iPhoneViewerViewController: UIViewController {
         streamClient.$state
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
-                self?.toolbarView.streamState = state
+                guard let self else { return }
+                toolbarView.streamState = state
                 if case .connected = state {
-                    self?.requestWindowList()
+                    requestWindowList()
+                } else if case .live = state {
+                    hasRequestedStreamForCurrentConnection = true
+                } else {
+                    hasRequestedStreamForCurrentConnection = false
                 }
+                updateFlowOverlays()
             }
             .store(in: &cancellables)
 
@@ -412,6 +478,7 @@ final class iPhoneViewerViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] windows in
                 guard let self else { return }
+                isAwaitingWindowList = false
                 toolbarView.windows = windows
                 if let selectedWindow = windows.first(where: \.isSelected) {
                     selectedWindowIsSimulator = selectedWindow.isSimulator
@@ -420,7 +487,17 @@ final class iPhoneViewerViewController: UIViewController {
                     selectedWindowIsSimulator = false
                     hasSelectedWindowMetadata = false
                 }
+                refreshAppLauncher()
                 updateInputMode()
+                updateFlowOverlays()
+            }
+            .store(in: &cancellables)
+
+        streamClient.$hosts
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] hosts in
+                self?.hostConnectionView.hosts = hosts
+                self?.updateFlowOverlays()
             }
             .store(in: &cancellables)
 
@@ -489,20 +566,167 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func requestWindowList() {
+        isAwaitingWindowList = true
+        refreshAppLauncher()
         nextSequenceNumber += 1
         streamClient.send(RemoteControlMessage(requestWindowListWithSequenceNumber: nextSequenceNumber))
     }
 
+    private func requestStartStream() {
+        hasRequestedStreamForCurrentConnection = true
+        nextSequenceNumber += 1
+        streamClient.send(RemoteControlMessage(startStreamWithSequenceNumber: nextSequenceNumber))
+    }
+
+    private func requestStartStreamIfNeeded() {
+        guard !hasRequestedStreamForCurrentConnection else { return }
+        requestStartStream()
+    }
+
+    private func refreshAppLauncher() {
+        appLauncherView.configure(
+            groups: RemoteApplicationWindowGroup.make(from: streamClient.windows),
+            recentGroupIDs: Set(recentAppIDs),
+            isLoading: isAwaitingWindowList
+        )
+    }
+
+    private func updateFlowOverlays() {
+        if isWaitingForSelectedStream {
+            switch streamClient.state {
+            case .idle, .searching, .connecting, .failed:
+                isWaitingForSelectedStream = false
+                isDismissingLauncherForSelectedStream = false
+                hasPendingSelectedStreamFrame = false
+                mirrorCanvasView.defersAutomaticContentArrival = false
+            case .connected, .live:
+                break
+            }
+        }
+
+        if isWaitingForSelectedStream {
+            hostConnectionView.setVisible(false, animated: view.window != nil)
+            if !isDismissingLauncherForSelectedStream {
+                appLauncherView.setVisible(false, animated: view.window != nil)
+            }
+            loadingInterstitialView.setVisible(
+                !isDismissingLauncherForSelectedStream,
+                animated: view.window != nil
+            )
+            mirrorCanvasView.alpha = 0
+            mirrorCanvasView.isUserInteractionEnabled = false
+            return
+        }
+
+        let shouldShowHosts: Bool
+        var shouldShowApps: Bool
+
+        switch streamClient.state {
+        case .idle, .searching, .connecting, .failed:
+            shouldShowHosts = true
+            shouldShowApps = false
+        case .connected:
+            shouldShowHosts = false
+            shouldShowApps = true
+        case .live:
+            shouldShowHosts = false
+            shouldShowApps = false
+        }
+
+        if isAppLauncherPresented {
+            switch streamClient.state {
+            case .connected, .live:
+                shouldShowApps = true
+            case .idle, .searching, .connecting, .failed:
+                isAppLauncherPresented = false
+            }
+        }
+
+        hostConnectionView.setVisible(shouldShowHosts, animated: view.window != nil)
+        appLauncherView.setVisible(shouldShowApps, animated: view.window != nil)
+        loadingInterstitialView.setVisible(false, animated: view.window != nil)
+        mirrorCanvasView.alpha = shouldShowApps ? 0 : 1
+        mirrorCanvasView.isUserInteractionEnabled = !shouldShowApps
+    }
+
+    private func presentAppLauncherFromToolbar() {
+        switch streamClient.state {
+        case .connected:
+            isAppLauncherPresented = true
+            requestWindowList()
+            updateFlowOverlays()
+        case .live:
+            requestWindowList()
+            mirrorCanvasView.isUserInteractionEnabled = false
+            mirrorCanvasView.departForAppSwitch { [weak self] in
+                guard let self else { return }
+                self.isAppLauncherPresented = true
+                self.updateFlowOverlays()
+            }
+        case .idle, .failed:
+            streamClient.restart()
+            updateFlowOverlays()
+        case .searching, .connecting:
+            updateFlowOverlays()
+        }
+    }
+
+    private func rememberAppSelection(_ window: RemoteWindowSummary) {
+        let groupID = window.appGroupID
+        recentAppIDs.removeAll { $0 == groupID }
+        recentAppIDs.insert(groupID, at: 0)
+        if recentAppIDs.count > 8 {
+            recentAppIDs.removeLast(recentAppIDs.count - 8)
+        }
+        UserDefaults.standard.set(recentAppIDs, forKey: "RecentMirroredAppIDs")
+        refreshAppLauncher()
+    }
+
     private func selectWindow(_ window: RemoteWindowSummary) {
+        isAppLauncherPresented = false
+        isWaitingForSelectedStream = true
+        isDismissingLauncherForSelectedStream = true
+        hasPendingSelectedStreamFrame = false
+        rememberAppSelection(window)
         resetFrameRateOverlay()
         currentFrameHasAlphaMask = false
         selectedWindowIsSimulator = window.isSimulator
         hasSelectedWindowMetadata = true
         updateInputMode()
         mirrorCanvasView.prepareForAppSwitch()
-        streamClient.clearCurrentFrame()
+        mirrorCanvasView.defersAutomaticContentArrival = true
+        streamClient.prepareForStreamSelection()
         nextSequenceNumber += 1
         streamClient.send(RemoteControlMessage(selectWindowID: window.id, sequenceNumber: nextSequenceNumber))
+        appLauncherView.setVisible(false, animated: view.window != nil) { [weak self] in
+            guard let self else { return }
+            self.isDismissingLauncherForSelectedStream = false
+            if self.hasPendingSelectedStreamFrame {
+                self.completeSelectedStreamTransition()
+            } else {
+                self.updateFlowOverlays()
+            }
+        }
+    }
+
+    private func handleSelectedStreamFrameReady() {
+        guard isWaitingForSelectedStream else { return }
+        hasPendingSelectedStreamFrame = true
+        guard !isDismissingLauncherForSelectedStream else { return }
+        completeSelectedStreamTransition()
+    }
+
+    private func completeSelectedStreamTransition() {
+        guard isWaitingForSelectedStream else { return }
+
+        isWaitingForSelectedStream = false
+        isDismissingLauncherForSelectedStream = false
+        hasPendingSelectedStreamFrame = false
+        mirrorCanvasView.alpha = 1
+        mirrorCanvasView.revealDeferredContentArrivalForAppSwitch()
+        mirrorCanvasView.isUserInteractionEnabled = true
+        loadingInterstitialView.setVisible(false, animated: view.window != nil)
+        updateFlowOverlays()
     }
 
     private func recordDisplayedFrame(_ image: UIImage?) {
@@ -616,6 +840,16 @@ final class iPhoneViewerViewController: UIViewController {
         toolbarView.setLayoutMode(layoutMode)
     }
 
+    private func disconnectFromHost() {
+        isAppLauncherPresented = false
+        isWaitingForSelectedStream = false
+        isDismissingLauncherForSelectedStream = false
+        hasPendingSelectedStreamFrame = false
+        mirrorCanvasView.defersAutomaticContentArrival = false
+        streamClient.stop()
+        updateFlowOverlays()
+    }
+
     private func toggleStreamConnection() {
         switch streamClient.state {
         case .idle, .failed:
@@ -674,11 +908,994 @@ final class iPhoneViewerViewController: UIViewController {
     }
 }
 
+private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
+    var hosts: [RemoteHostSummary] = [] {
+        didSet { reloadHosts() }
+    }
+
+    var onHostSelected: (RemoteHostSummary) -> Void = { _ in }
+    var onManualConnectRequested: (String, String?, String?) -> Void = { _, _, _ in }
+    var onDiagnosticsTapped: () -> Void = {}
+
+    private let dimmingView = UIView()
+    private let panelView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let titleLabel = UILabel()
+    private let detailLabel = UILabel()
+    private let hostsStackView = UIStackView()
+    private let emptyStateLabel = UILabel()
+    private let addHostButton = UIButton(type: .system)
+    private let diagnosticsButton = UIButton(type: .system)
+    private let manualOverlayView = UIView()
+    private let manualPanelView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let manualTitleLabel = UILabel()
+    private let manualDetailLabel = UILabel()
+    private let hostField = UITextField()
+    private let connectButton = UIButton(type: .system)
+    private let cancelManualButton = UIButton(type: .system)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureSubviews()
+        reloadHosts()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setVisible(_ visible: Bool, animated: Bool, completion: (() -> Void)? = nil) {
+        guard visible != !isHidden || alpha != (visible ? 1 : 0) else {
+            completion?()
+            return
+        }
+
+        if visible {
+            isHidden = false
+        } else {
+            hideManualConnect(animated: false)
+            endEditing(true)
+        }
+
+        let updates = {
+            self.alpha = visible ? 1 : 0
+        }
+
+        let animationCompletion: (Bool) -> Void = { _ in
+            self.isHidden = !visible
+            completion?()
+        }
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.22,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseOut],
+                animations: updates,
+                completion: animationCompletion
+            )
+        } else {
+            updates()
+            animationCompletion(true)
+        }
+    }
+
+    private func configureSubviews() {
+        alpha = 0
+        isHidden = true
+
+        dimmingView.translatesAutoresizingMaskIntoConstraints = false
+        dimmingView.backgroundColor = UIColor.black.withAlphaComponent(0.20)
+
+        panelView.translatesAutoresizingMaskIntoConstraints = false
+        panelView.clipsToBounds = true
+        panelView.layer.cornerRadius = 28
+        panelView.layer.cornerCurve = .continuous
+
+        titleLabel.font = .systemFont(ofSize: 28, weight: .bold)
+        titleLabel.textColor = .white
+        titleLabel.text = "Choose Mac"
+
+        detailLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        detailLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+        detailLabel.numberOfLines = 2
+        detailLabel.text = "Pick a saved or nearby host, or connect to a new Mac by hostname."
+
+        hostsStackView.axis = .vertical
+        hostsStackView.spacing = 0
+
+        emptyStateLabel.text = "No saved hosts yet."
+        emptyStateLabel.textColor = UIColor.white.withAlphaComponent(0.64)
+        emptyStateLabel.font = .systemFont(ofSize: 15, weight: .medium)
+
+        addHostButton.configuration = filledButtonConfiguration(title: "Connect to New Host", systemName: "plus")
+        addHostButton.addAction(UIAction { [weak self] _ in
+            self?.showManualConnect()
+        }, for: .touchUpInside)
+
+        diagnosticsButton.configuration = plainButtonConfiguration(title: "Diagnostics", systemName: "stethoscope")
+        diagnosticsButton.addAction(UIAction { [weak self] _ in
+            self?.onDiagnosticsTapped()
+        }, for: .touchUpInside)
+
+        configureTextField(hostField, placeholder: "Hostname or Tailscale IP")
+        hostField.keyboardType = .URL
+        hostField.returnKeyType = .go
+        hostField.delegate = self
+        hostField.inputAccessoryView = keyboardAccessoryView()
+
+        connectButton.configuration = filledButtonConfiguration(title: "Connect", systemName: "network")
+        connectButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            submitManualConnect()
+        }, for: .touchUpInside)
+
+        cancelManualButton.configuration = plainButtonConfiguration(title: "Cancel", systemName: "xmark")
+        cancelManualButton.addAction(UIAction { [weak self] _ in
+            self?.hideManualConnect(animated: true)
+        }, for: .touchUpInside)
+
+        let headerStack = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
+        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        headerStack.axis = .vertical
+        headerStack.spacing = 6
+
+        let buttonStack = UIStackView(arrangedSubviews: [addHostButton, diagnosticsButton])
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+        buttonStack.axis = .horizontal
+        buttonStack.spacing = 10
+        buttonStack.distribution = .fillEqually
+
+        let contentStack = UIStackView(arrangedSubviews: [headerStack, hostsStackView, emptyStateLabel, buttonStack])
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.axis = .vertical
+        contentStack.spacing = 18
+
+        addSubview(dimmingView)
+        addSubview(panelView)
+        addSubview(manualOverlayView)
+        panelView.contentView.addSubview(contentStack)
+        configureManualOverlay()
+
+        NSLayoutConstraint.activate([
+            dimmingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dimmingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dimmingView.topAnchor.constraint(equalTo: topAnchor),
+            dimmingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            panelView.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            panelView.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -20),
+            panelView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            panelView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            panelView.widthAnchor.constraint(lessThanOrEqualToConstant: 430),
+
+            contentStack.leadingAnchor.constraint(equalTo: panelView.contentView.leadingAnchor, constant: 20),
+            contentStack.trailingAnchor.constraint(equalTo: panelView.contentView.trailingAnchor, constant: -20),
+            contentStack.topAnchor.constraint(equalTo: panelView.contentView.topAnchor, constant: 22),
+            contentStack.bottomAnchor.constraint(equalTo: panelView.contentView.bottomAnchor, constant: -20),
+
+            addHostButton.heightAnchor.constraint(equalToConstant: 48),
+            diagnosticsButton.heightAnchor.constraint(equalToConstant: 48),
+
+            manualOverlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            manualOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            manualOverlayView.topAnchor.constraint(equalTo: topAnchor),
+            manualOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    private func configureManualOverlay() {
+        manualOverlayView.translatesAutoresizingMaskIntoConstraints = false
+        manualOverlayView.alpha = 0
+        manualOverlayView.isHidden = true
+        manualOverlayView.backgroundColor = UIColor.black.withAlphaComponent(0.22)
+
+        manualPanelView.translatesAutoresizingMaskIntoConstraints = false
+        manualPanelView.clipsToBounds = true
+        manualPanelView.layer.cornerRadius = 24
+        manualPanelView.layer.cornerCurve = .continuous
+
+        manualTitleLabel.text = "Connect to New Host"
+        manualTitleLabel.textColor = .white
+        manualTitleLabel.font = .systemFont(ofSize: 23, weight: .bold)
+
+        manualDetailLabel.text = "Enter a hostname, MagicDNS name, or Tailscale IP. Successful direct hosts are saved here."
+        manualDetailLabel.textColor = UIColor.white.withAlphaComponent(0.68)
+        manualDetailLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        manualDetailLabel.numberOfLines = 0
+
+        let buttonStack = UIStackView(arrangedSubviews: [cancelManualButton, connectButton])
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+        buttonStack.axis = .horizontal
+        buttonStack.spacing = 10
+        buttonStack.distribution = .fillEqually
+
+        let stackView = UIStackView(arrangedSubviews: [manualTitleLabel, manualDetailLabel, hostField, buttonStack])
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.axis = .vertical
+        stackView.spacing = 12
+
+        manualOverlayView.addSubview(manualPanelView)
+        manualPanelView.contentView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            manualPanelView.leadingAnchor.constraint(greaterThanOrEqualTo: manualOverlayView.safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            manualPanelView.trailingAnchor.constraint(lessThanOrEqualTo: manualOverlayView.safeAreaLayoutGuide.trailingAnchor, constant: -20),
+            manualPanelView.centerXAnchor.constraint(equalTo: manualOverlayView.centerXAnchor),
+            manualPanelView.centerYAnchor.constraint(equalTo: manualOverlayView.centerYAnchor),
+            manualPanelView.widthAnchor.constraint(lessThanOrEqualToConstant: 390),
+
+            stackView.leadingAnchor.constraint(equalTo: manualPanelView.contentView.leadingAnchor, constant: 18),
+            stackView.trailingAnchor.constraint(equalTo: manualPanelView.contentView.trailingAnchor, constant: -18),
+            stackView.topAnchor.constraint(equalTo: manualPanelView.contentView.topAnchor, constant: 20),
+            stackView.bottomAnchor.constraint(equalTo: manualPanelView.contentView.bottomAnchor, constant: -18),
+
+            hostField.heightAnchor.constraint(equalToConstant: 48),
+            cancelManualButton.heightAnchor.constraint(equalToConstant: 48),
+            connectButton.heightAnchor.constraint(equalToConstant: 48)
+        ])
+    }
+
+    private func configureTextField(_ textField: UITextField, placeholder: String) {
+        textField.borderStyle = .none
+        textField.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        textField.textColor = .white
+        textField.tintColor = .white
+        textField.autocapitalizationType = .none
+        textField.autocorrectionType = .no
+        textField.clearButtonMode = .whileEditing
+        textField.attributedPlaceholder = NSAttributedString(
+            string: placeholder,
+            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.48)]
+        )
+        textField.layer.cornerRadius = 14
+        textField.layer.cornerCurve = .continuous
+        textField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 14, height: 1))
+        textField.leftViewMode = .always
+    }
+
+    private func keyboardAccessoryView() -> UIView {
+        let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+        toolbar.barStyle = .black
+        toolbar.items = [
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            UIBarButtonItem(
+                title: "Done",
+                style: .done,
+                target: self,
+                action: #selector(dismissKeyboard)
+            )
+        ]
+        return toolbar
+    }
+
+    private func submitManualConnect() {
+        let host = (hostField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            hostField.becomeFirstResponder()
+            return
+        }
+
+        endEditing(true)
+        hideManualConnect(animated: true)
+        onManualConnectRequested(host, nil, nil)
+    }
+
+    @objc private func dismissKeyboard() {
+        endEditing(true)
+    }
+
+    private func showManualConnect() {
+        hostField.text = ""
+        manualOverlayView.isHidden = false
+        manualPanelView.transform = CGAffineTransform(translationX: 0, y: 18)
+        UIView.animate(
+            withDuration: 0.22,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut]
+        ) {
+            self.manualOverlayView.alpha = 1
+            self.manualPanelView.transform = .identity
+        } completion: { _ in
+            self.hostField.becomeFirstResponder()
+        }
+    }
+
+    private func hideManualConnect(animated: Bool) {
+        endEditing(true)
+        let updates = {
+            self.manualOverlayView.alpha = 0
+            self.manualPanelView.transform = CGAffineTransform(translationX: 0, y: 18)
+        }
+        let completion: (Bool) -> Void = { _ in
+            self.manualOverlayView.isHidden = true
+            self.manualPanelView.transform = .identity
+        }
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.18,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseIn],
+                animations: updates,
+                completion: completion
+            )
+        } else {
+            updates()
+            completion(true)
+        }
+    }
+
+    private func reloadHosts() {
+        hostsStackView.arrangedSubviews.forEach { view in
+            hostsStackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let sortedHosts = hosts.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        emptyStateLabel.isHidden = !sortedHosts.isEmpty
+
+        sortedHosts.enumerated().forEach { index, host in
+            let button = UIButton(type: .system)
+            button.configuration = hostButtonConfiguration(for: host)
+            button.contentHorizontalAlignment = .fill
+            button.addAction(UIAction { [weak self] _ in
+                self?.onHostSelected(host)
+            }, for: .touchUpInside)
+            button.heightAnchor.constraint(equalToConstant: 66).isActive = true
+            hostsStackView.addArrangedSubview(button)
+
+            if index < sortedHosts.count - 1 {
+                let separator = UIView()
+                separator.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+                separator.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale).isActive = true
+                hostsStackView.addArrangedSubview(separator)
+            }
+        }
+    }
+
+    private func hostButtonConfiguration(for host: RemoteHostSummary) -> UIButton.Configuration {
+        var configuration = UIButton.Configuration.filled()
+        configuration.baseBackgroundColor = host.isActive
+            ? UIColor.systemBlue.withAlphaComponent(0.30)
+            : UIColor.white.withAlphaComponent(0.08)
+        configuration.baseForegroundColor = .white
+        configuration.cornerStyle = .medium
+        configuration.image = UIImage(systemName: host.symbolName)
+        configuration.imagePadding = 14
+        configuration.title = host.name
+        configuration.subtitle = host.detail
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 18, weight: .semibold)
+            return outgoing
+        }
+        configuration.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 12, weight: .medium)
+            outgoing.foregroundColor = UIColor.white.withAlphaComponent(0.64)
+            return outgoing
+        }
+        return configuration
+    }
+
+    private func filledButtonConfiguration(title: String, systemName: String) -> UIButton.Configuration {
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = title
+        configuration.image = UIImage(systemName: systemName)
+        configuration.imagePadding = 8
+        configuration.baseBackgroundColor = .systemBlue
+        configuration.baseForegroundColor = .white
+        configuration.cornerStyle = .large
+        return configuration
+    }
+
+    private func plainButtonConfiguration(title: String, systemName: String) -> UIButton.Configuration {
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = title
+        configuration.image = UIImage(systemName: systemName)
+        configuration.imagePadding = 8
+        configuration.baseBackgroundColor = UIColor.white.withAlphaComponent(0.10)
+        configuration.baseForegroundColor = .white
+        configuration.cornerStyle = .large
+        return configuration
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        submitManualConnect()
+        return true
+    }
+}
+
+private final class LoadingInterstitialView: UIView {
+    private let dimmingView = UIView()
+    private let panelView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private let titleLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureSubviews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setVisible(_ visible: Bool, animated: Bool) {
+        guard visible != !isHidden || alpha != (visible ? 1 : 0) else { return }
+
+        if visible {
+            isHidden = false
+            spinner.startAnimating()
+        }
+
+        let updates = {
+            self.alpha = visible ? 1 : 0
+            self.panelView.transform = visible ? .identity : CGAffineTransform(scaleX: 0.94, y: 0.94)
+        }
+
+        let completion: (Bool) -> Void = { _ in
+            self.isHidden = !visible
+            if !visible {
+                self.spinner.stopAnimating()
+            }
+        }
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.2,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseOut],
+                animations: updates,
+                completion: completion
+            )
+        } else {
+            updates()
+            completion(true)
+        }
+    }
+
+    private func configureSubviews() {
+        alpha = 0
+        isHidden = true
+
+        dimmingView.translatesAutoresizingMaskIntoConstraints = false
+        dimmingView.backgroundColor = UIColor.black.withAlphaComponent(0.10)
+
+        panelView.translatesAutoresizingMaskIntoConstraints = false
+        panelView.clipsToBounds = true
+        panelView.layer.cornerRadius = 24
+        panelView.layer.cornerCurve = .continuous
+        panelView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        spinner.color = .white
+        spinner.hidesWhenStopped = false
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.text = "Loading..."
+        titleLabel.textColor = .white
+        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        titleLabel.textAlignment = .center
+
+        let stackView = UIStackView(arrangedSubviews: [spinner, titleLabel])
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.axis = .vertical
+        stackView.alignment = .center
+        stackView.spacing = 14
+
+        addSubview(dimmingView)
+        addSubview(panelView)
+        panelView.contentView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            dimmingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dimmingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dimmingView.topAnchor.constraint(equalTo: topAnchor),
+            dimmingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            panelView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            panelView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            panelView.widthAnchor.constraint(equalToConstant: 180),
+            panelView.heightAnchor.constraint(equalToConstant: 132),
+
+            stackView.centerXAnchor.constraint(equalTo: panelView.contentView.centerXAnchor),
+            stackView.centerYAnchor.constraint(equalTo: panelView.contentView.centerYAnchor)
+        ])
+    }
+}
+
+private final class AppLauncherOverlayView: UIView {
+    var onWindowSelected: (RemoteWindowSummary) -> Void = { _ in }
+    var onRefreshTapped: () -> Void = {}
+
+    private let dimmingView = UIView()
+    private let panelView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let titleLabel = UILabel()
+    private let subtitleLabel = UILabel()
+    private let emptyStateLabel = UILabel()
+    private let loadingIndicator = UIActivityIndicatorView(style: .large)
+    private let refreshButton = UIButton(type: .system)
+    private let collectionView: UICollectionView
+    private let windowPanelView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let windowIconView = UIImageView()
+    private let windowTitleLabel = UILabel()
+    private let windowTableView = UITableView(frame: .zero, style: .plain)
+    private let backButton = UIButton(type: .system)
+    private var groups: [RemoteApplicationWindowGroup] = []
+    private var recentGroupIDs = Set<String>()
+    private var selectedGroup: RemoteApplicationWindowGroup?
+
+    override init(frame: CGRect) {
+        let layout = UICollectionViewFlowLayout()
+        layout.minimumInteritemSpacing = 12
+        layout.minimumLineSpacing = 24
+        layout.sectionInset = UIEdgeInsets(top: 18, left: 18, bottom: 24, right: 18)
+        collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        super.init(frame: frame)
+        configureSubviews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(groups: [RemoteApplicationWindowGroup], recentGroupIDs: Set<String>, isLoading: Bool) {
+        self.recentGroupIDs = recentGroupIDs
+        self.groups = groups.sorted { lhs, rhs in
+            let lhsPriority = sortPriority(for: lhs)
+            let rhsPriority = sortPriority(for: rhs)
+            if lhsPriority != rhsPriority {
+                return lhsPriority < rhsPriority
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        collectionView.reloadData()
+        loadingIndicator.isHidden = !isLoading || !self.groups.isEmpty
+        if isLoading, self.groups.isEmpty {
+            loadingIndicator.startAnimating()
+        } else {
+            loadingIndicator.stopAnimating()
+        }
+        emptyStateLabel.isHidden = isLoading || !self.groups.isEmpty
+    }
+
+    func setVisible(_ visible: Bool, animated: Bool, completion: (() -> Void)? = nil) {
+        guard visible != !isHidden || alpha != (visible ? 1 : 0) else {
+            completion?()
+            return
+        }
+
+        if visible {
+            isHidden = false
+        } else {
+            hideWindowChooser(animated: false)
+        }
+
+        let updates = {
+            self.alpha = visible ? 1 : 0
+        }
+
+        let animationCompletion: (Bool) -> Void = { _ in
+            self.isHidden = !visible
+            completion?()
+        }
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.22,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseOut],
+                animations: updates,
+                completion: animationCompletion
+            )
+        } else {
+            updates()
+            animationCompletion(true)
+        }
+    }
+
+    private func configureSubviews() {
+        alpha = 0
+        isHidden = true
+
+        dimmingView.translatesAutoresizingMaskIntoConstraints = false
+        dimmingView.backgroundColor = UIColor.black.withAlphaComponent(0.12)
+
+        panelView.translatesAutoresizingMaskIntoConstraints = false
+        panelView.clipsToBounds = true
+        panelView.layer.cornerRadius = 28
+        panelView.layer.cornerCurve = .continuous
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.text = "Choose App"
+        titleLabel.textColor = .white
+        titleLabel.font = .systemFont(ofSize: 27, weight: .bold)
+        titleLabel.textAlignment = .center
+
+        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        subtitleLabel.text = "Simulator and recent apps stay near the top."
+        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.66)
+        subtitleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        subtitleLabel.textAlignment = .center
+
+        refreshButton.translatesAutoresizingMaskIntoConstraints = false
+        refreshButton.configuration = {
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = UIImage(systemName: "arrow.clockwise")
+            configuration.baseForegroundColor = .white
+            return configuration
+        }()
+        refreshButton.addAction(UIAction { [weak self] _ in
+            self?.onRefreshTapped()
+        }, for: .touchUpInside)
+
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        collectionView.backgroundColor = .clear
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.alwaysBounceVertical = true
+        collectionView.showsVerticalScrollIndicator = false
+        collectionView.register(AppLauncherCell.self, forCellWithReuseIdentifier: AppLauncherCell.reuseIdentifier)
+
+        emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyStateLabel.text = "No streamable apps found.\nOpen an app on your Mac, then refresh."
+        emptyStateLabel.textColor = UIColor.white.withAlphaComponent(0.66)
+        emptyStateLabel.font = .systemFont(ofSize: 16, weight: .medium)
+        emptyStateLabel.numberOfLines = 0
+        emptyStateLabel.textAlignment = .center
+        emptyStateLabel.isHidden = true
+
+        loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        loadingIndicator.color = .white
+        loadingIndicator.hidesWhenStopped = true
+
+        addSubview(dimmingView)
+        addSubview(panelView)
+        addSubview(windowPanelView)
+        panelView.contentView.addSubview(titleLabel)
+        panelView.contentView.addSubview(subtitleLabel)
+        panelView.contentView.addSubview(refreshButton)
+        panelView.contentView.addSubview(collectionView)
+        panelView.contentView.addSubview(emptyStateLabel)
+        panelView.contentView.addSubview(loadingIndicator)
+
+        configureWindowPanel()
+
+        NSLayoutConstraint.activate([
+            dimmingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dimmingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dimmingView.topAnchor.constraint(equalTo: topAnchor),
+            dimmingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            panelView.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            panelView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -20),
+            panelView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 96),
+            panelView.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -24),
+
+            titleLabel.topAnchor.constraint(equalTo: panelView.contentView.topAnchor, constant: 22),
+            titleLabel.centerXAnchor.constraint(equalTo: panelView.contentView.centerXAnchor),
+
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 5),
+            subtitleLabel.leadingAnchor.constraint(equalTo: panelView.contentView.leadingAnchor, constant: 20),
+            subtitleLabel.trailingAnchor.constraint(equalTo: panelView.contentView.trailingAnchor, constant: -20),
+
+            refreshButton.trailingAnchor.constraint(equalTo: panelView.contentView.trailingAnchor, constant: -14),
+            refreshButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            refreshButton.widthAnchor.constraint(equalToConstant: 44),
+            refreshButton.heightAnchor.constraint(equalToConstant: 44),
+
+            collectionView.leadingAnchor.constraint(equalTo: panelView.contentView.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: panelView.contentView.trailingAnchor),
+            collectionView.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 10),
+            collectionView.bottomAnchor.constraint(equalTo: panelView.contentView.bottomAnchor),
+
+            emptyStateLabel.centerXAnchor.constraint(equalTo: panelView.contentView.centerXAnchor),
+            emptyStateLabel.centerYAnchor.constraint(equalTo: panelView.contentView.centerYAnchor),
+            emptyStateLabel.leadingAnchor.constraint(equalTo: panelView.contentView.leadingAnchor, constant: 28),
+            emptyStateLabel.trailingAnchor.constraint(equalTo: panelView.contentView.trailingAnchor, constant: -28),
+
+            loadingIndicator.centerXAnchor.constraint(equalTo: panelView.contentView.centerXAnchor),
+            loadingIndicator.centerYAnchor.constraint(equalTo: panelView.contentView.centerYAnchor)
+        ])
+    }
+
+    private func configureWindowPanel() {
+        windowPanelView.translatesAutoresizingMaskIntoConstraints = false
+        windowPanelView.alpha = 0
+        windowPanelView.isHidden = true
+        windowPanelView.clipsToBounds = true
+        windowPanelView.layer.cornerRadius = 28
+        windowPanelView.layer.cornerCurve = .continuous
+
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        backButton.configuration = {
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = UIImage(systemName: "chevron.left")
+            configuration.baseForegroundColor = .white
+            return configuration
+        }()
+        backButton.addAction(UIAction { [weak self] _ in
+            self?.hideWindowChooser(animated: true)
+        }, for: .touchUpInside)
+
+        windowIconView.translatesAutoresizingMaskIntoConstraints = false
+        windowIconView.contentMode = .scaleAspectFit
+        windowIconView.layer.cornerRadius = 10
+        windowIconView.layer.cornerCurve = .continuous
+        windowIconView.clipsToBounds = true
+
+        windowTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        windowTitleLabel.text = "Choose Window"
+        windowTitleLabel.textColor = .white
+        windowTitleLabel.font = .systemFont(ofSize: 24, weight: .bold)
+
+        windowTableView.translatesAutoresizingMaskIntoConstraints = false
+        windowTableView.backgroundColor = .clear
+        windowTableView.separatorColor = UIColor.white.withAlphaComponent(0.16)
+        windowTableView.dataSource = self
+        windowTableView.delegate = self
+        windowTableView.register(UITableViewCell.self, forCellReuseIdentifier: "WindowCell")
+
+        windowPanelView.contentView.addSubview(backButton)
+        windowPanelView.contentView.addSubview(windowIconView)
+        windowPanelView.contentView.addSubview(windowTitleLabel)
+        windowPanelView.contentView.addSubview(windowTableView)
+
+        NSLayoutConstraint.activate([
+            windowPanelView.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            windowPanelView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -20),
+            windowPanelView.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            windowPanelView.heightAnchor.constraint(lessThanOrEqualTo: heightAnchor, multiplier: 0.55),
+
+            backButton.leadingAnchor.constraint(equalTo: windowPanelView.contentView.leadingAnchor, constant: 12),
+            backButton.topAnchor.constraint(equalTo: windowPanelView.contentView.topAnchor, constant: 12),
+            backButton.widthAnchor.constraint(equalToConstant: 44),
+            backButton.heightAnchor.constraint(equalToConstant: 44),
+
+            windowIconView.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 4),
+            windowIconView.centerYAnchor.constraint(equalTo: backButton.centerYAnchor),
+            windowIconView.widthAnchor.constraint(equalToConstant: 32),
+            windowIconView.heightAnchor.constraint(equalToConstant: 32),
+
+            windowTitleLabel.leadingAnchor.constraint(equalTo: windowIconView.trailingAnchor, constant: 10),
+            windowTitleLabel.trailingAnchor.constraint(equalTo: windowPanelView.contentView.trailingAnchor, constant: -18),
+            windowTitleLabel.centerYAnchor.constraint(equalTo: backButton.centerYAnchor),
+
+            windowTableView.leadingAnchor.constraint(equalTo: windowPanelView.contentView.leadingAnchor),
+            windowTableView.trailingAnchor.constraint(equalTo: windowPanelView.contentView.trailingAnchor),
+            windowTableView.topAnchor.constraint(equalTo: backButton.bottomAnchor, constant: 10),
+            windowTableView.bottomAnchor.constraint(equalTo: windowPanelView.contentView.bottomAnchor, constant: -10),
+            windowTableView.heightAnchor.constraint(greaterThanOrEqualToConstant: 132)
+        ])
+    }
+
+    private func showWindowChooser(for group: RemoteApplicationWindowGroup) {
+        selectedGroup = group
+        windowIconView.image = group.iconImage ?? group.fallbackImage
+        windowTitleLabel.text = group.name
+        windowTableView.reloadData()
+        windowPanelView.isHidden = false
+        windowPanelView.transform = CGAffineTransform(translationX: 0, y: 18)
+        UIView.animate(
+            withDuration: 0.22,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut]
+        ) {
+            self.windowPanelView.alpha = 1
+            self.windowPanelView.transform = .identity
+        }
+    }
+
+    private func hideWindowChooser(animated: Bool) {
+        selectedGroup = nil
+        let updates = {
+            self.windowPanelView.alpha = 0
+            self.windowPanelView.transform = CGAffineTransform(translationX: 0, y: 18)
+        }
+        let completion: (Bool) -> Void = { _ in
+            self.windowPanelView.isHidden = true
+            self.windowPanelView.transform = .identity
+        }
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.18,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseIn],
+                animations: updates,
+                completion: completion
+            )
+        } else {
+            updates()
+            completion(true)
+        }
+    }
+
+    private func sortPriority(for group: RemoteApplicationWindowGroup) -> Int {
+        if group.containsSimulator { return 0 }
+        if recentGroupIDs.contains(group.id) { return 1 }
+        return 2
+    }
+}
+
+extension AppLauncherOverlayView: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        groups.count
+    }
+
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        guard let cell = collectionView.dequeueReusableCell(
+            withReuseIdentifier: AppLauncherCell.reuseIdentifier,
+            for: indexPath
+        ) as? AppLauncherCell else {
+            return UICollectionViewCell()
+        }
+
+        let group = groups[indexPath.item]
+        cell.configure(
+            group: group,
+            isRecent: recentGroupIDs.contains(group.id)
+        )
+        return cell
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        let group = groups[indexPath.item]
+        guard group.windows.count > 1 else {
+            if let window = group.windows.first {
+                onWindowSelected(window)
+            }
+            return
+        }
+
+        showWindowChooser(for: group)
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        layout collectionViewLayout: UICollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> CGSize {
+        let availableWidth = collectionView.bounds.width - 36
+        let targetColumns: CGFloat = collectionView.bounds.width > 600 ? 6 : 4
+        let spacing: CGFloat = 12 * (targetColumns - 1)
+        let width = floor((availableWidth - spacing) / targetColumns)
+        return CGSize(width: max(72, width), height: 118)
+    }
+}
+
+extension AppLauncherOverlayView: UITableViewDataSource, UITableViewDelegate {
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        selectedGroup?.windows.count ?? 0
+    }
+
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        58
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "WindowCell", for: indexPath)
+        guard let window = selectedGroup?.windows[indexPath.row] else { return cell }
+
+        var content = UIListContentConfiguration.subtitleCell()
+        content.text = window.title
+        content.secondaryText = window.subtitle
+        content.image = selectedGroup?.iconImage ?? selectedGroup?.fallbackImage
+        content.imageProperties.maximumSize = CGSize(width: 28, height: 28)
+        content.textProperties.color = .white
+        content.textProperties.font = .systemFont(ofSize: 16, weight: .semibold)
+        content.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.58)
+        content.secondaryTextProperties.font = .systemFont(ofSize: 12, weight: .medium)
+        cell.contentConfiguration = content
+        cell.backgroundColor = .clear
+        cell.selectedBackgroundView = {
+            let view = UIView()
+            view.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+            return view
+        }()
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard let window = selectedGroup?.windows[indexPath.row] else { return }
+        onWindowSelected(window)
+    }
+}
+
+private final class AppLauncherCell: UICollectionViewCell {
+    static let reuseIdentifier = "AppLauncherCell"
+
+    private let iconView = UIImageView()
+    private let nameLabel = UILabel()
+    private let badgeLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureSubviews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(group: RemoteApplicationWindowGroup, isRecent: Bool) {
+        iconView.image = group.iconImage ?? group.fallbackImage
+        iconView.tintColor = .white
+        nameLabel.text = group.name
+        if group.containsSimulator {
+            badgeLabel.text = "SIM"
+            badgeLabel.isHidden = false
+        } else if isRecent {
+            badgeLabel.text = "RECENT"
+            badgeLabel.isHidden = false
+        } else {
+            badgeLabel.isHidden = true
+        }
+    }
+
+    private func configureSubviews() {
+        contentView.backgroundColor = .clear
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.contentMode = .scaleAspectFit
+        iconView.layer.cornerRadius = 14
+        iconView.layer.cornerCurve = .continuous
+        iconView.clipsToBounds = true
+
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.textColor = .white
+        nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        nameLabel.textAlignment = .center
+        nameLabel.numberOfLines = 2
+        nameLabel.adjustsFontSizeToFitWidth = true
+        nameLabel.minimumScaleFactor = 0.82
+
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        badgeLabel.textColor = .white
+        badgeLabel.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.84)
+        badgeLabel.font = .systemFont(ofSize: 8, weight: .bold)
+        badgeLabel.textAlignment = .center
+        badgeLabel.layer.cornerRadius = 6
+        badgeLabel.layer.cornerCurve = .continuous
+        badgeLabel.clipsToBounds = true
+
+        contentView.addSubview(iconView)
+        contentView.addSubview(nameLabel)
+        contentView.addSubview(badgeLabel)
+
+        NSLayoutConstraint.activate([
+            iconView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            iconView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 58),
+            iconView.heightAnchor.constraint(equalToConstant: 58),
+
+            badgeLabel.trailingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            badgeLabel.topAnchor.constraint(equalTo: iconView.topAnchor, constant: -5),
+            badgeLabel.heightAnchor.constraint(equalToConstant: 14),
+            badgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 34),
+
+            nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 2),
+            nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2),
+            nameLabel.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 9)
+        ])
+    }
+}
+
 private final class ViewerToolbarView: UIView {
     var streamState: RemoteFrameStreamState = .idle {
         didSet {
             updateStatusColor()
             updateConnectionButton()
+            updateSettingsMenu()
         }
     }
 
@@ -686,23 +1903,17 @@ private final class ViewerToolbarView: UIView {
         didSet { updateKeyboardButton() }
     }
 
-    var onExitTapped: () -> Void = {}
+    var onAppLauncherTapped: () -> Void = {}
     var onKeyboardTapped: () -> Void = {}
     var onManualConnectTapped: () -> Void = {}
     var onForgetManualEndpointTapped: () -> Void = {}
+    var onDisconnectTapped: () -> Void = {}
     var onDiagnosticsTapped: () -> Void = {}
     var onVideoDebugToggled: () -> Void = {}
-    var onRequestWindowList: () -> Void = {}
-    var onWindowSelected: (RemoteWindowSummary) -> Void = { _ in }
     var onLayoutModeChanged: (MirrorLayoutMode) -> Void = { _ in }
-    var windows: [RemoteWindowSummary] = [] {
-        didSet {
-            updateConnectionMenu()
-        }
-    }
+    var windows: [RemoteWindowSummary] = []
     var manualEndpointDescription: String? {
         didSet {
-            updateConnectionMenu()
             updateSettingsMenu()
         }
     }
@@ -744,7 +1955,6 @@ private final class ViewerToolbarView: UIView {
         isUserInteractionEnabled = true
 
         exitButton.translatesAutoresizingMaskIntoConstraints = false
-        exitButton.showsMenuAsPrimaryAction = true
         rightStackView.translatesAutoresizingMaskIntoConstraints = false
         rightStackView.alignment = .center
         rightStackView.distribution = .fill
@@ -771,12 +1981,15 @@ private final class ViewerToolbarView: UIView {
     }
 
     private func configureActions() {
+        exitButton.addAction(UIAction { [weak self] _ in
+            self?.onAppLauncherTapped()
+        }, for: .touchUpInside)
+
         keyboardButton.addAction(UIAction { [weak self] _ in
             self?.onKeyboardTapped()
         }, for: .touchUpInside)
 
         settingsButton.showsMenuAsPrimaryAction = true
-        updateConnectionMenu()
         updateSettingsMenu()
     }
 
@@ -882,6 +2095,18 @@ private final class ViewerToolbarView: UIView {
             )
         }
 
+        if streamState.canDisconnect {
+            actions.append(
+                UIAction(
+                    title: "Disconnect",
+                    image: UIImage(systemName: "xmark.circle"),
+                    attributes: .destructive
+                ) { [weak self] _ in
+                    self?.onDisconnectTapped()
+                }
+            )
+        }
+
         actions.append(
             UIAction(
                 title: "Diagnostics",
@@ -892,84 +2117,6 @@ private final class ViewerToolbarView: UIView {
         )
 
         return actions
-    }
-
-    private func updateConnectionMenu() {
-        exitButton.menu = UIMenu(
-            title: "Connection",
-            children: connectionMenuActions() + windowMenuActions()
-        )
-    }
-
-    private func connectionMenuActions() -> [UIMenuElement] {
-        let title: String
-        let imageName: String
-
-        switch streamState {
-        case .idle, .failed:
-            title = "Reconnect"
-            imageName = "arrow.clockwise"
-        case .searching, .connecting, .connected, .live:
-            title = "Disconnect"
-            imageName = "rectangle.portrait.and.arrow.right"
-        }
-
-        return [
-            UIAction(title: title, image: UIImage(systemName: imageName)) { [weak self] _ in
-                self?.onExitTapped()
-            }
-        ]
-    }
-
-    private func windowMenuActions() -> [UIMenuElement] {
-        let selectableWindows = windows.filter { window in
-            #if targetEnvironment(simulator)
-            !window.isSimulator
-            #else
-            true
-            #endif
-        }
-
-        let refreshAction = UIAction(
-            title: "Refresh Apps",
-            image: UIImage(systemName: "arrow.clockwise")
-        ) { [weak self] _ in
-            self?.onRequestWindowList()
-        }
-
-        guard !selectableWindows.isEmpty else {
-            return [refreshAction]
-        }
-
-        return [refreshAction] + RemoteApplicationWindowGroup.make(from: selectableWindows).map { group -> UIMenuElement in
-            if group.windows.count == 1, let window = group.windows.first {
-                return UIAction(
-                    title: group.name,
-                    subtitle: window.subtitle,
-                    image: group.iconImage ?? group.fallbackImage,
-                    state: window.isSelected ? .on : .off
-                ) { [weak self] _ in
-                    guard let self else { return }
-                    onWindowSelected(window)
-                }
-            }
-
-            return UIMenu(
-                title: group.name,
-                image: group.iconImage ?? group.fallbackImage,
-                children: group.windows.map { window in
-                    UIAction(
-                        title: window.title,
-                        subtitle: window.subtitle,
-                        image: UIImage(systemName: window.isSimulator ? "iphone.gen3" : "macwindow"),
-                        state: window.isSelected ? .on : .off
-                    ) { [weak self] _ in
-                        guard let self else { return }
-                        onWindowSelected(window)
-                    }
-                }
-            )
-        }
     }
 
     func setLayoutMode(_ mode: MirrorLayoutMode) {
@@ -988,12 +2135,13 @@ private final class ViewerToolbarView: UIView {
         switch streamState {
         case .idle, .failed:
             systemName = "arrow.clockwise"
-        case .searching, .connecting, .connected, .live:
-            systemName = "rectangle.portrait.and.arrow.right"
+        case .searching, .connecting:
+            systemName = "antenna.radiowaves.left.and.right"
+        case .connected, .live:
+            systemName = "square.grid.2x2"
         }
 
         exitButton.setImage(UIImage(systemName: systemName), for: .normal)
-        updateConnectionMenu()
     }
 
     private func updateKeyboardButton() {
@@ -1136,10 +2284,34 @@ private final class MirrorCanvasView: UIView {
             pointerSurfaceView.usesTouchDragForSingleFingerPan = usesTouchDragForSingleFingerPan
         }
     }
+    var defersAutomaticContentArrival = false
 
     func prepareForAppSwitch() {
         nextSwitchDirection *= -1
         pendingTransitionStyle = .switching(direction: nextSwitchDirection)
+    }
+
+    func departForAppSwitch(completion: @escaping () -> Void) {
+        prepareForAppSwitch()
+        departureCompletion = completion
+
+        if image != nil {
+            image = nil
+        } else if videoSourceSize != nil {
+            videoSourceSize = nil
+        } else {
+            runDepartureCompletion()
+        }
+    }
+
+    func revealDeferredContentArrivalForAppSwitch() {
+        guard hasContent else {
+            defersAutomaticContentArrival = false
+            return
+        }
+
+        defersAutomaticContentArrival = false
+        animateContentArrival()
     }
 
     var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
@@ -1158,6 +2330,7 @@ private final class MirrorCanvasView: UIView {
     private var lastContentSize = CGSize.zero
     private var isSynchronizingRenderMode = false
     private var isAnimatingDeparture = false
+    private var departureCompletion: (() -> Void)?
     private var pendingTransitionStyle: MirrorContentTransitionStyle = .normal
     private var nextSwitchDirection: CGFloat = 1
     private var transitionGeneration = 0
@@ -1266,7 +2439,7 @@ private final class MirrorCanvasView: UIView {
         updateContentVisibility()
         updateScrollableContent(resetOffsetIfNeeded: false)
 
-        if !hadContent && hasUpdatedContent {
+        if !hadContent && hasUpdatedContent && !defersAutomaticContentArrival {
             animateContentArrival()
         }
     }
@@ -1426,6 +2599,7 @@ private final class MirrorCanvasView: UIView {
             pointerSurfaceView.isUserInteractionEnabled = true
             updateContentVisibility()
             updateScrollableContent(resetOffsetIfNeeded: false)
+            runDepartureCompletion()
             return
         }
 
@@ -1455,8 +2629,15 @@ private final class MirrorCanvasView: UIView {
                 self.pointerSurfaceView.isUserInteractionEnabled = true
                 self.updateContentVisibility()
                 self.updateScrollableContent(resetOffsetIfNeeded: false)
+                self.runDepartureCompletion()
             }
         )
+    }
+
+    private func runDepartureCompletion() {
+        let completion = departureCompletion
+        departureCompletion = nil
+        completion?()
     }
 
     private func clearDepartedContent() {

@@ -11,6 +11,7 @@ struct RemoteControlMessage: Codable, Equatable {
         case keyPress
         case requestWindowList
         case selectWindow
+        case startStream
         case requestKeyFrame
     }
 
@@ -115,6 +116,19 @@ struct RemoteControlMessage: Codable, Equatable {
         self.text = nil
         self.key = nil
         self.windowID = windowID
+        self.scrollDeltaX = 0
+        self.scrollDeltaY = 0
+        self.scrollPhase = nil
+    }
+
+    init(startStreamWithSequenceNumber sequenceNumber: UInt64) {
+        self.kind = .startStream
+        self.normalizedX = 0
+        self.normalizedY = 0
+        self.sequenceNumber = sequenceNumber
+        self.text = nil
+        self.key = nil
+        self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil

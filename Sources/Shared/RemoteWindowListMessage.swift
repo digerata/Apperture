@@ -22,3 +22,8 @@ struct RemoteWindowSummary: Codable, Equatable, Identifiable {
 struct RemoteWindowListMessage: Codable, Equatable {
     var windows: [RemoteWindowSummary]
 }
+
+struct RemoteAppIconMessage: Codable, Equatable {
+    var appGroupID: String
+    var pngData: Data
+}

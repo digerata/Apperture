@@ -12,6 +12,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var latestFrameMask: UIImage?
     @Published private(set) var wallpaper: UIImage?
     @Published private(set) var windows: [RemoteWindowSummary] = []
+    @Published private(set) var hosts: [RemoteHostSummary] = []
     @Published private(set) var manualEndpointDescription: String?
     @Published private(set) var diagnostics = RemoteConnectionDiagnostics()
     @Published private(set) var streamDiagnostics: RemoteStreamDiagnosticsMessage?
@@ -27,16 +28,20 @@ final class RemoteFrameStreamClient: ObservableObject {
     private var retryWorkItem: DispatchWorkItem?
     private var timeoutWorkItem: DispatchWorkItem?
     private var connectedHostName: String?
-    private var manualEndpoint: ManualStreamEndpoint?
+    private var activeCandidateID: String?
+    private var savedManualEndpoints: [ManualStreamEndpoint] = []
+    private var appIconCache: [String: Data] = [:]
     private let videoDecoder = RemoteVideoDecoder()
     private var nextSequenceNumber: UInt64 = 0
     private var lastKeyFrameRequestTime: CFAbsoluteTime = 0
     private var requiresVideoKeyFrame = false
+    private var isAwaitingStreamResetAfterSelection = false
+    private var streamDecodeGeneration: UInt64 = 0
 
     init() {
-        if let savedEndpoint = UserDefaults.standard.string(forKey: Self.manualEndpointDefaultsKey),
-           let endpoint = ManualStreamEndpoint(input: savedEndpoint) {
-            manualEndpoint = endpoint
+        savedManualEndpoints = Self.loadSavedManualEndpoints()
+        appIconCache = Self.loadAppIconCache()
+        if let endpoint = savedManualEndpoints.first {
             manualEndpointDescription = endpoint.displayName
             updateDiagnostics { diagnostics in
                 diagnostics.manualEndpoint = endpoint.displayName
@@ -80,6 +85,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         candidates = []
         nextCandidateIndex = 0
         connectedHostName = nil
+        activeCandidateID = nil
         latestFrame = nil
         videoFrameSize = nil
         latestFrameMask = nil
@@ -90,7 +96,10 @@ final class RemoteFrameStreamClient: ObservableObject {
         nextSequenceNumber = 0
         lastKeyFrameRequestTime = 0
         requiresVideoKeyFrame = false
+        isAwaitingStreamResetAfterSelection = false
+        streamDecodeGeneration += 1
         videoDecoder.reset()
+        rebuildCandidates(from: [])
         state = .idle
         updateDiagnostics { diagnostics in
             diagnostics.browserState = "Stopped"
@@ -147,15 +156,20 @@ final class RemoteFrameStreamClient: ObservableObject {
         videoDecoder.reset()
     }
 
+    func prepareForStreamSelection() {
+        isAwaitingStreamResetAfterSelection = true
+        streamDecodeGeneration += 1
+        clearCurrentFrame()
+    }
+
     @discardableResult
     func connectManually(to input: String) -> String? {
         guard let endpoint = ManualStreamEndpoint(input: input) else {
             return "Enter a Mac hostname, MagicDNS name, or Tailscale IP."
         }
 
-        manualEndpoint = endpoint
+        saveManualEndpoint(endpoint)
         manualEndpointDescription = endpoint.displayName
-        UserDefaults.standard.set(endpoint.storageValue, forKey: Self.manualEndpointDefaultsKey)
         updateDiagnostics { diagnostics in
             diagnostics.manualEndpoint = endpoint.displayName
         }
@@ -164,8 +178,13 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection?.cancel()
         connection = nil
         connectedHostName = nil
+        activeCandidateID = nil
+        streamDecodeGeneration += 1
         nextCandidateIndex = 0
         rebuildCandidates(from: browseResults)
+        if let index = candidates.firstIndex(where: { $0.id == endpoint.id }) {
+            nextCandidateIndex = index
+        }
 
         if browser == nil {
             start()
@@ -177,21 +196,50 @@ final class RemoteFrameStreamClient: ObservableObject {
     }
 
     func forgetManualEndpoint() {
-        guard manualEndpoint != nil else { return }
+        guard !savedManualEndpoints.isEmpty else { return }
 
-        manualEndpoint = nil
+        savedManualEndpoints = []
         manualEndpointDescription = nil
-        UserDefaults.standard.removeObject(forKey: Self.manualEndpointDefaultsKey)
+        Self.storeSavedManualEndpoints([])
         updateDiagnostics { diagnostics in
             diagnostics.manualEndpoint = nil
         }
-        recordDiagnosticEvent("Manual endpoint removed.")
+        recordDiagnosticEvent("Saved direct hosts removed.")
 
         connection?.cancel()
         connection = nil
         connectedHostName = nil
+        activeCandidateID = nil
+        streamDecodeGeneration += 1
         nextCandidateIndex = 0
         rebuildCandidates(from: browseResults)
+        connectToNextCandidate()
+    }
+
+    func connect(toHostID hostID: RemoteHostSummary.ID) {
+        guard let index = candidates.firstIndex(where: { $0.id == hostID }) else {
+            recordDiagnosticEvent("Host selection ignored; candidate is unavailable.")
+            return
+        }
+
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        connection?.cancel()
+        connection = nil
+        connectedHostName = nil
+        activeCandidateID = nil
+        latestFrame = nil
+        videoFrameSize = nil
+        latestFrameMask = nil
+        wallpaper = nil
+        windows = []
+        streamDiagnostics = nil
+        isAwaitingStreamResetAfterSelection = false
+        streamDecodeGeneration += 1
+        videoDecoder.reset()
+        nextCandidateIndex = index
         connectToNextCandidate()
     }
 
@@ -268,31 +316,91 @@ final class RemoteFrameStreamClient: ObservableObject {
         }
         #endif
 
-        if let manualEndpoint {
-            updatedCandidates.append(
+        updatedCandidates.append(
+            contentsOf: savedManualEndpoints.map { endpoint in
                 StreamEndpointCandidate(
-                    id: manualEndpoint.id,
-                    name: manualEndpoint.displayName,
-                    endpoint: manualEndpoint.endpoint
+                    id: endpoint.id,
+                    name: endpoint.displayName,
+                    endpoint: endpoint.endpoint,
+                    detail: endpoint.addressDescription,
+                    isSaved: true
                 )
-            )
-        }
+            }
+        )
 
         updatedCandidates.append(
             contentsOf: results.map { result in
                 StreamEndpointCandidate(endpoint: result.endpoint)
             }
-            .sorted { $0.id < $1.id }
         )
+
+        updatedCandidates = Array(
+            Dictionary(grouping: updatedCandidates, by: \.id)
+                .compactMap { _, candidates in candidates.first }
+        )
+        .sorted { lhs, rhs in
+            let nameComparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameComparison != .orderedSame {
+                return nameComparison == .orderedAscending
+            }
+            return lhs.endpointDescription.localizedCaseInsensitiveCompare(rhs.endpointDescription) == .orderedAscending
+        }
 
         guard updatedCandidates != candidates else { return }
         candidates = updatedCandidates
+        updateHostSummaries()
         updateDiagnostics { diagnostics in
             diagnostics.candidates = updatedCandidates.map(\.diagnosticDescription)
         }
         if nextCandidateIndex >= candidates.count {
             nextCandidateIndex = 0
         }
+    }
+
+    private func saveManualEndpoint(_ endpoint: ManualStreamEndpoint) {
+        savedManualEndpoints.removeAll { $0.id == endpoint.id }
+        savedManualEndpoints.append(endpoint)
+        savedManualEndpoints.sort { lhs, rhs in
+            lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+        Self.storeSavedManualEndpoints(savedManualEndpoints)
+    }
+
+    private static func loadSavedManualEndpoints() -> [ManualStreamEndpoint] {
+        let decoder = JSONDecoder()
+        if let data = UserDefaults.standard.data(forKey: savedManualEndpointsDefaultsKey),
+           let endpoints = try? decoder.decode([ManualStreamEndpoint].self, from: data) {
+            return endpoints.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+        }
+
+        if let legacyEndpointValue = UserDefaults.standard.string(forKey: manualEndpointDefaultsKey),
+           let endpoint = ManualStreamEndpoint(input: legacyEndpointValue) {
+            storeSavedManualEndpoints([endpoint])
+            UserDefaults.standard.removeObject(forKey: manualEndpointDefaultsKey)
+            return [endpoint]
+        }
+
+        return []
+    }
+
+    private static func storeSavedManualEndpoints(_ endpoints: [ManualStreamEndpoint]) {
+        guard let data = try? JSONEncoder().encode(endpoints) else { return }
+        UserDefaults.standard.set(data, forKey: savedManualEndpointsDefaultsKey)
+    }
+
+    private static func loadAppIconCache() -> [String: Data] {
+        guard let data = UserDefaults.standard.data(forKey: appIconCacheDefaultsKey),
+              let cache = try? JSONDecoder().decode([String: Data].self, from: data) else {
+            return [:]
+        }
+        return cache
+    }
+
+    private static func storeAppIconCache(_ cache: [String: Data]) {
+        guard let data = try? JSONEncoder().encode(cache) else { return }
+        UserDefaults.standard.set(data, forKey: appIconCacheDefaultsKey)
     }
 
     private func connectToNextCandidate() {
@@ -313,6 +421,8 @@ final class RemoteFrameStreamClient: ObservableObject {
 
     private func connect(to candidate: StreamEndpointCandidate) {
         connectedHostName = candidate.name
+        activeCandidateID = candidate.id
+        updateHostSummaries()
         state = .connecting(candidate.name)
         updateDiagnostics { diagnostics in
             diagnostics.activeCandidate = candidate.diagnosticDescription
@@ -424,19 +534,24 @@ final class RemoteFrameStreamClient: ObservableObject {
     private func handlePacket(_ data: Data) {
         guard let firstByte = data.first,
               let type = RemoteFrameStreamConfiguration.PacketType(rawValue: firstByte) else {
+            guard !isAwaitingStreamResetAfterSelection else { return }
             handleLegacyFrame(data)
             return
         }
 
         let imageData = data.dropFirst()
 
+        guard !isAwaitingStreamResetAfterSelection || type.allowsDuringStreamSelectionResetWait else {
+            return
+        }
+
         switch type {
         case .frame:
             guard let image = UIImage(data: Data(imageData)) else { return }
             let hostName = connectedHostName ?? "Mac"
+            state = .live(hostName)
             videoFrameSize = nil
             latestFrame = image
-            state = .live(hostName)
         case .wallpaper:
             guard let image = UIImage(data: Data(imageData)) else { return }
             wallpaper = image
@@ -444,7 +559,25 @@ final class RemoteFrameStreamClient: ObservableObject {
             guard let message = try? JSONDecoder().decode(RemoteWindowListMessage.self, from: Data(imageData)) else {
                 return
             }
-            windows = message.windows
+            windows = message.windows.map { window in
+                var updatedWindow = window
+                if updatedWindow.appIconPNGData == nil {
+                    updatedWindow.appIconPNGData = appIconCache[updatedWindow.appGroupID]
+                }
+                return updatedWindow
+            }
+        case .appIcon:
+            guard let message = try? JSONDecoder().decode(RemoteAppIconMessage.self, from: Data(imageData)) else {
+                return
+            }
+            appIconCache[message.appGroupID] = message.pngData
+            Self.storeAppIconCache(appIconCache)
+            windows = windows.map { window in
+                guard window.appGroupID == message.appGroupID else { return window }
+                var updatedWindow = window
+                updatedWindow.appIconPNGData = message.pngData
+                return updatedWindow
+            }
         case .videoFormat:
             guard let message = try? JSONDecoder().decode(RemoteVideoFormatMessage.self, from: Data(imageData)) else {
                 return
@@ -460,15 +593,20 @@ final class RemoteFrameStreamClient: ObservableObject {
                 guard message.isKeyFrame else { return }
                 requiresVideoKeyFrame = false
             }
+            let decodeGeneration = streamDecodeGeneration
             videoDecoder.decode(message) { [weak self] sampleBuffer, size in
                 Task { @MainActor in
                     guard let self else { return }
+                    guard self.streamDecodeGeneration == decodeGeneration,
+                          !self.isAwaitingStreamResetAfterSelection else {
+                        return
+                    }
                     let hostName = self.connectedHostName ?? "Mac"
                     if size.width > 0, size.height > 0 {
                         self.videoFrameSize = size
                     }
-                    self.videoSampleBuffers.send(sampleBuffer)
                     self.state = .live(hostName)
+                    self.videoSampleBuffers.send(sampleBuffer)
                 }
             }
         case .videoMask:
@@ -483,7 +621,14 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             developerActivity.apply(event)
+        case .hostInfo:
+            guard let message = try? JSONDecoder().decode(RemoteHostInfoMessage.self, from: Data(imageData)) else {
+                return
+            }
+            applyHostInfo(message)
         case .streamReset:
+            isAwaitingStreamResetAfterSelection = false
+            streamDecodeGeneration += 1
             clearCurrentFrame()
             state = .connected(connectedHostName ?? "Mac")
             recordDiagnosticEvent("Remote stream reset.")
@@ -494,9 +639,9 @@ final class RemoteFrameStreamClient: ObservableObject {
         guard let image = UIImage(data: data) else { return }
 
         let hostName = connectedHostName ?? "Mac"
+        state = .live(hostName)
         videoFrameSize = nil
         latestFrame = image
-        state = .live(hostName)
     }
 
     private func handleReceiveFailure(_ message: String) {
@@ -513,10 +658,14 @@ final class RemoteFrameStreamClient: ObservableObject {
         windows = []
         streamDiagnostics = nil
         developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+        isAwaitingStreamResetAfterSelection = false
+        streamDecodeGeneration += 1
         videoDecoder.reset()
         connection?.cancel()
         connection = nil
         connectedHostName = nil
+        activeCandidateID = nil
+        updateHostSummaries()
         updateDiagnostics { diagnostics in
             diagnostics.lastError = message
             diagnostics.activeCandidate = nil
@@ -567,6 +716,32 @@ final class RemoteFrameStreamClient: ObservableObject {
         diagnostics = nextDiagnostics
     }
 
+    private func updateHostSummaries() {
+        hosts = candidates.map { candidate in
+            RemoteHostSummary(
+                id: candidate.id,
+                name: candidate.name,
+                detail: candidate.endpointDescription,
+                symbolName: candidate.symbolName,
+                isSaved: candidate.isSaved,
+                isManual: candidate.isManual,
+                isActive: candidate.id == activeCandidateID
+            )
+        }
+    }
+
+    private func applyHostInfo(_ message: RemoteHostInfoMessage) {
+        guard let activeCandidateID,
+              let index = candidates.firstIndex(where: { $0.id == activeCandidateID }) else {
+            return
+        }
+
+        candidates[index].name = message.displayName
+        candidates[index].detail = candidates[index].endpointDescription
+        candidates[index].symbolNameOverride = message.symbolName
+        updateHostSummaries()
+    }
+
     private func recordDiagnosticEvent(_ message: String) {
         updateDiagnostics { diagnostics in
             diagnostics.recentEvents.append("\(Date().formatted(date: .omitted, time: .standard)): \(message)")
@@ -588,6 +763,19 @@ final class RemoteFrameStreamClient: ObservableObject {
     }
 
     private static let manualEndpointDefaultsKey = "RemoteFrameStreamClient.manualEndpoint"
+    private static let savedManualEndpointsDefaultsKey = "RemoteFrameStreamClient.savedManualEndpoints"
+    private static let appIconCacheDefaultsKey = "RemoteFrameStreamClient.appIconCache"
+}
+
+private extension RemoteFrameStreamConfiguration.PacketType {
+    var allowsDuringStreamSelectionResetWait: Bool {
+        switch self {
+        case .wallpaper, .windowList, .appIcon, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo:
+            return true
+        case .frame, .videoFormat, .videoFrame, .videoMask:
+            return false
+        }
+    }
 }
 
 enum RemoteFrameStreamState: Equatable {
@@ -642,6 +830,25 @@ enum RemoteFrameStreamState: Equatable {
             return .systemRed
         }
     }
+
+    var canDisconnect: Bool {
+        switch self {
+        case .searching, .connecting, .connected, .live:
+            return true
+        case .idle, .failed:
+            return false
+        }
+    }
+}
+
+struct RemoteHostSummary: Equatable, Identifiable {
+    var id: String
+    var name: String
+    var detail: String
+    var symbolName: String
+    var isSaved: Bool
+    var isManual: Bool
+    var isActive: Bool
 }
 
 struct RemoteConnectionDiagnostics: Equatable {
@@ -693,27 +900,76 @@ private extension NWEndpoint {
         guard case let .service(name, _, _, _) = self else { return nil }
         return name
     }
+
+    var displayAddress: String {
+        switch self {
+        case .service(let name, let type, let domain, _):
+            let normalizedDomain = domain.isEmpty ? "local." : domain
+            return "\(name).\(type)\(normalizedDomain)"
+        case .hostPort(let host, let port):
+            return "\(host):\(port.rawValue)"
+        case .unix(let path):
+            return path
+        case .url(let url):
+            return url.absoluteString
+        case .opaque:
+            return String(describing: self)
+        @unknown default:
+            return String(describing: self)
+        }
+    }
 }
 
 private struct StreamEndpointCandidate: Equatable {
     var id: String
     var name: String
     var endpoint: NWEndpoint
+    var detail: String?
+    var isSaved: Bool
+    var symbolNameOverride: String?
 
-    init(id: String, name: String, endpoint: NWEndpoint) {
+    init(id: String, name: String, endpoint: NWEndpoint, detail: String? = nil, isSaved: Bool = false) {
         self.id = id
         self.name = name
         self.endpoint = endpoint
+        self.detail = detail
+        self.isSaved = isSaved
+        self.symbolNameOverride = nil
     }
 
     init(endpoint: NWEndpoint) {
         self.endpoint = endpoint
         self.id = String(describing: endpoint)
-        self.name = endpoint.serviceName ?? "Mac"
+        self.name = endpoint.serviceName?.replacingOccurrences(of: "Apperture ", with: "") ?? "Mac"
+        self.detail = endpoint.displayAddress
+        self.isSaved = false
+        self.symbolNameOverride = nil
     }
 
     var diagnosticDescription: String {
         "\(name) — \(String(describing: endpoint))"
+    }
+
+    var endpointDescription: String {
+        detail ?? endpoint.displayAddress
+    }
+
+    var isManual: Bool {
+        id.hasPrefix("manual-")
+    }
+
+    var symbolName: String {
+        if let symbolNameOverride {
+            return symbolNameOverride
+        }
+
+        #if targetEnvironment(simulator)
+        if id == "simulator-loopback" {
+            return "macwindow"
+        }
+        #endif
+
+        return isManual ? "macstudio" : "desktopcomputer"
     }
 
     static func == (lhs: StreamEndpointCandidate, rhs: StreamEndpointCandidate) -> Bool {
@@ -721,7 +977,7 @@ private struct StreamEndpointCandidate: Equatable {
     }
 }
 
-private struct ManualStreamEndpoint: Equatable {
+private struct ManualStreamEndpoint: Codable, Equatable {
     var host: String
     var port: UInt16
 
@@ -753,6 +1009,10 @@ private struct ManualStreamEndpoint: Equatable {
     }
 
     var displayName: String {
+        host
+    }
+
+    var addressDescription: String {
         storageValue
     }
 

@@ -11,6 +11,8 @@ enum RemoteFrameStreamConfiguration {
         case streamDiagnostics = 6
         case developerActivity = 7
         case streamReset = 8
+        case hostInfo = 9
+        case appIcon = 10
     }
 
     static let bonjourType = "_apperture._tcp"
@@ -33,4 +35,11 @@ enum RemoteFrameStreamConfiguration {
     static let videoKeyFrameInterval = 60
     static let backpressureKeyFrameRequestInterval = 1.0
     static let enablesDirectCapturePixelBufferEncoding = true
+}
+
+struct RemoteHostInfoMessage: Codable, Equatable {
+    var displayName: String
+    var hostName: String
+    var modelIdentifier: String?
+    var symbolName: String
 }

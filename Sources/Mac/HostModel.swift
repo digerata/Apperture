@@ -201,6 +201,8 @@ final class HostModel: ObservableObject {
         case .selectWindow:
             guard let windowID = message.windowID else { return }
             selectRemoteWindow(windowID)
+        case .startStream:
+            startLiveViewForRemoteRequest()
         case .requestKeyFrame:
             return
         default:
@@ -246,9 +248,20 @@ final class HostModel: ObservableObject {
         selectedWindowID = windowID
         publishWindowList()
 
-        if streamStatus.isRunning {
-            startLiveView()
+        startLiveView()
+    }
+
+    private func startLiveViewForRemoteRequest() {
+        refreshWindows()
+        publishWindowList()
+
+        guard selectedWindow != nil else {
+            streamStatus = .failed("No streamable windows are available.")
+            return
         }
+
+        guard !streamStatus.isRunning else { return }
+        startLiveView()
     }
 
     private func restartLiveViewIfNeeded() {
@@ -257,23 +270,44 @@ final class HostModel: ObservableObject {
     }
 
     private func publishWindowList() {
-        frameServer.publishWindowList(
-            windows.filter { window in
-                window.ownerName != "Apperture"
-            }
-            .map { window in
-                RemoteWindowSummary(
-                    id: window.id,
-                    title: window.windowListTitle,
-                    subtitle: window.windowListSubtitle,
-                    isSelected: window.id == selectedWindowID,
-                    isSimulator: window.isLikelySimulator,
-                    appName: window.applicationName,
-                    appBundleIdentifier: window.applicationBundleIdentifier,
-                    appIconPNGData: window.applicationIconPNGData
+        let streamableWindows = windows.filter { window in
+            window.ownerName != "Apperture"
+        }
+        let summaries = streamableWindows.map { window in
+            RemoteWindowSummary(
+                id: window.id,
+                title: window.windowListTitle,
+                subtitle: window.windowListSubtitle,
+                isSelected: window.id == selectedWindowID,
+                isSimulator: window.isLikelySimulator,
+                appName: window.applicationName,
+                appBundleIdentifier: window.applicationBundleIdentifier,
+                appIconPNGData: nil
+            )
+        }
+
+        frameServer.publishWindowList(summaries)
+        publishApplicationIcons(for: streamableWindows)
+    }
+
+    private func publishApplicationIcons(for windows: [MirrorWindow]) {
+        let uniqueWindows = Dictionary(grouping: windows, by: \.applicationGroupID)
+            .compactMap { _, windows in windows.first }
+
+        DispatchQueue.global(qos: .utility).async { [frameServer] in
+            for window in uniqueWindows {
+                guard let iconPNGData = WindowDiscoveryService.applicationIconPNGData(for: window.processID) else {
+                    continue
+                }
+
+                frameServer.publishApplicationIcon(
+                    RemoteAppIconMessage(
+                        appGroupID: window.applicationGroupID,
+                        pngData: iconPNGData
+                    )
                 )
             }
-        )
+        }
     }
 }
 

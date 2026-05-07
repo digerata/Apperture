@@ -60,14 +60,15 @@ struct WindowDiscoveryService {
         let applicationInfo = applicationInfo(
             for: processID,
             fallbackName: ownerName,
-            cache: &applicationInfoByProcessID
+            cache: &applicationInfoByProcessID,
+            includesIcon: false
         )
 
         return MirrorWindow(
             id: rawWindowID,
             applicationName: applicationInfo.name,
             applicationBundleIdentifier: applicationInfo.bundleIdentifier,
-            applicationIconPNGData: applicationInfo.iconPNGData,
+            applicationIconPNGData: nil,
             ownerName: ownerName,
             title: title,
             processID: processID,
@@ -80,24 +81,33 @@ struct WindowDiscoveryService {
     private func applicationInfo(
         for processID: Int32,
         fallbackName: String,
-        cache: inout [Int32: DiscoveredApplicationInfo]
+        cache: inout [Int32: DiscoveredApplicationInfo],
+        includesIcon: Bool
     ) -> DiscoveredApplicationInfo {
         if let cachedInfo = cache[processID] {
             return cachedInfo
         }
 
         let runningApplication = NSRunningApplication(processIdentifier: processID)
-        let icon = runningApplication?.icon ?? runningApplication?.bundleURL.map { bundleURL in
-            NSWorkspace.shared.icon(forFile: bundleURL.path)
-        }
 
         let info = DiscoveredApplicationInfo(
             name: runningApplication?.localizedName ?? fallbackName,
             bundleIdentifier: runningApplication?.bundleIdentifier,
-            iconPNGData: icon.flatMap { Self.iconPNGData(from: $0) }
+            iconPNGData: includesIcon ? Self.iconPNGData(for: runningApplication) : nil
         )
         cache[processID] = info
         return info
+    }
+
+    static func applicationIconPNGData(for processID: Int32) -> Data? {
+        iconPNGData(for: NSRunningApplication(processIdentifier: processID))
+    }
+
+    private static func iconPNGData(for runningApplication: NSRunningApplication?) -> Data? {
+        let icon = runningApplication?.icon ?? runningApplication?.bundleURL.map { bundleURL in
+            NSWorkspace.shared.icon(forFile: bundleURL.path)
+        }
+        return icon.flatMap { iconPNGData(from: $0) }
     }
 
     private static func iconPNGData(from icon: NSImage) -> Data? {
