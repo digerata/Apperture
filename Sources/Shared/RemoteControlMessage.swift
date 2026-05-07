@@ -21,6 +21,16 @@ struct RemoteControlMessage: Codable, Equatable {
         case escape
     }
 
+    enum ScrollPhase: String, Codable {
+        case began
+        case changed
+        case ended
+        case cancelled
+        case momentumBegan
+        case momentumChanged
+        case momentumEnded
+    }
+
     var kind: Kind
     var normalizedX: Double
     var normalizedY: Double
@@ -30,6 +40,7 @@ struct RemoteControlMessage: Codable, Equatable {
     var windowID: UInt32?
     var scrollDeltaX: Double
     var scrollDeltaY: Double
+    var scrollPhase: ScrollPhase?
 
     init(kind: Kind, normalizedX: Double, normalizedY: Double, sequenceNumber: UInt64) {
         self.kind = kind
@@ -41,9 +52,10 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
+        self.scrollPhase = nil
     }
 
-    init(scrollAt point: CGPoint, delta: CGPoint, sequenceNumber: UInt64) {
+    init(scrollAt point: CGPoint, delta: CGPoint, phase: ScrollPhase, sequenceNumber: UInt64) {
         self.kind = .scroll
         self.normalizedX = min(max(Double(point.x), 0), 1)
         self.normalizedY = min(max(Double(point.y), 0), 1)
@@ -53,6 +65,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = nil
         self.scrollDeltaX = Double(delta.x)
         self.scrollDeltaY = Double(delta.y)
+        self.scrollPhase = phase
     }
 
     init(text: String, sequenceNumber: UInt64) {
@@ -65,6 +78,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
+        self.scrollPhase = nil
     }
 
     init(key: Key, sequenceNumber: UInt64) {
@@ -77,6 +91,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
+        self.scrollPhase = nil
     }
 
     init(requestWindowListWithSequenceNumber sequenceNumber: UInt64) {
@@ -89,6 +104,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
+        self.scrollPhase = nil
     }
 
     init(selectWindowID windowID: UInt32, sequenceNumber: UInt64) {
@@ -101,6 +117,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = windowID
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
+        self.scrollPhase = nil
     }
 
     init(requestKeyFrameWithSequenceNumber sequenceNumber: UInt64) {
@@ -113,5 +130,6 @@ struct RemoteControlMessage: Codable, Equatable {
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
+        self.scrollPhase = nil
     }
 }

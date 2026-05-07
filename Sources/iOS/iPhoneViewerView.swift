@@ -23,6 +23,110 @@ private final class PaddedLabel: UILabel {
     }
 }
 
+private final class DeveloperActivityBannerView: UIView {
+    private let iconView = UIImageView()
+    private let titleLabel = UILabel()
+    private let detailLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureSubviews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(activity: DeveloperActivityState) {
+        guard let event = activity.latestEvent else {
+            isHidden = true
+            return
+        }
+
+        iconView.image = UIImage(systemName: symbolName(for: event))
+        iconView.tintColor = symbolColor(for: event)
+        titleLabel.text = activity.title
+        if let issueSummary = activity.issueSummary {
+            detailLabel.text = "\(activity.detail) - \(issueSummary)"
+        } else {
+            detailLabel.text = activity.detail
+        }
+        isHidden = false
+    }
+
+    private func configureSubviews() {
+        isHidden = true
+        isUserInteractionEnabled = false
+        backgroundColor = UIColor.black.withAlphaComponent(0.46)
+        layer.cornerRadius = 12
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.contentMode = .scaleAspectFit
+        iconView.setContentHuggingPriority(.required, for: .horizontal)
+        iconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.numberOfLines = 1
+
+        detailLabel.translatesAutoresizingMaskIntoConstraints = false
+        detailLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        detailLabel.textColor = UIColor.white.withAlphaComponent(0.78)
+        detailLabel.numberOfLines = 2
+
+        let textStack = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.axis = .vertical
+        textStack.spacing = 2
+
+        addSubview(iconView)
+        addSubview(textStack)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 20),
+            iconView.heightAnchor.constraint(equalToConstant: 20),
+
+            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            textStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            textStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            textStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        ])
+    }
+
+    private func symbolName(for event: DeveloperActivityEvent) -> String {
+        if event.isFailure {
+            return "xmark.circle.fill"
+        }
+
+        switch event.kind {
+        case "buildStarted":
+            return "hammer.fill"
+        case "testStarted":
+            return "checkmark.seal"
+        case "appLaunched":
+            return "play.circle.fill"
+        case "simulatorBooted":
+            return "iphone.gen3"
+        default:
+            return "terminal.fill"
+        }
+    }
+
+    private func symbolColor(for event: DeveloperActivityEvent) -> UIColor {
+        if event.isFailure {
+            return .systemRed
+        }
+
+        return event.isActive ? .systemBlue : .systemGreen
+    }
+}
+
 final class iPhoneViewerViewController: UIViewController {
     private let streamClient = RemoteFrameStreamClient()
     private var cancellables = Set<AnyCancellable>()
@@ -34,14 +138,21 @@ final class iPhoneViewerViewController: UIViewController {
     private let toolbarView = ViewerToolbarView()
     private let keyboardInputView = KeyboardInputView()
     private let fpsOverlayLabel = PaddedLabel()
+    private let developerActivityBannerView = DeveloperActivityBannerView()
     private var currentDefaultLayoutMode: MirrorLayoutMode?
     private var mirrorLeadingConstraint: NSLayoutConstraint?
     private var mirrorTrailingConstraint: NSLayoutConstraint?
     private var mirrorTopConstraint: NSLayoutConstraint?
     private var mirrorBottomConstraint: NSLayoutConstraint?
+    private var developerActivityTopConstraint: NSLayoutConstraint?
+    private var developerActivityLeadingConstraint: NSLayoutConstraint?
+    private var developerActivityTrailingConstraint: NSLayoutConstraint?
     private var frameTimestamps: [CFTimeInterval] = []
     private var displayedFPS: Double?
     private var latestStreamDiagnostics: RemoteStreamDiagnosticsMessage?
+    private var selectedWindowIsSimulator = false
+    private var hasSelectedWindowMetadata = false
+    private var currentFrameHasAlphaMask = false
     private var isVideoDebugEnabled = UserDefaults.standard.bool(forKey: "VideoDebugOverlayEnabled") {
         didSet {
             UserDefaults.standard.set(isVideoDebugEnabled, forKey: "VideoDebugOverlayEnabled")
@@ -114,10 +225,13 @@ final class iPhoneViewerViewController: UIViewController {
         fpsOverlayLabel.text = "FPS --"
         fpsOverlayLabel.isHidden = true
 
+        developerActivityBannerView.translatesAutoresizingMaskIntoConstraints = false
+
         view.addSubview(fallbackWallpaperView)
         view.addSubview(wallpaperImageView)
         view.addSubview(mirrorCanvasView)
         view.addSubview(toolbarView)
+        view.addSubview(developerActivityBannerView)
         view.addSubview(fpsOverlayLabel)
         view.addSubview(keyboardInputView)
 
@@ -125,10 +239,25 @@ final class iPhoneViewerViewController: UIViewController {
         let mirrorTrailingConstraint = mirrorCanvasView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         let mirrorTopConstraint = mirrorCanvasView.topAnchor.constraint(equalTo: view.topAnchor, constant: 76)
         let mirrorBottomConstraint = mirrorCanvasView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8)
+        let developerActivityTopConstraint = developerActivityBannerView.topAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.topAnchor,
+            constant: 72
+        )
+        let developerActivityLeadingConstraint = developerActivityBannerView.leadingAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.leadingAnchor,
+            constant: 16
+        )
+        let developerActivityTrailingConstraint = developerActivityBannerView.trailingAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+            constant: -16
+        )
         self.mirrorLeadingConstraint = mirrorLeadingConstraint
         self.mirrorTrailingConstraint = mirrorTrailingConstraint
         self.mirrorTopConstraint = mirrorTopConstraint
         self.mirrorBottomConstraint = mirrorBottomConstraint
+        self.developerActivityTopConstraint = developerActivityTopConstraint
+        self.developerActivityLeadingConstraint = developerActivityLeadingConstraint
+        self.developerActivityTrailingConstraint = developerActivityTrailingConstraint
 
         NSLayoutConstraint.activate([
             fallbackWallpaperView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -151,6 +280,11 @@ final class iPhoneViewerViewController: UIViewController {
             toolbarView.topAnchor.constraint(equalTo: view.topAnchor),
             toolbarView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
+            developerActivityTopConstraint,
+            developerActivityLeadingConstraint,
+            developerActivityTrailingConstraint,
+            developerActivityBannerView.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
+
             fpsOverlayLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             fpsOverlayLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
             fpsOverlayLabel.widthAnchor.constraint(equalToConstant: 176),
@@ -167,8 +301,8 @@ final class iPhoneViewerViewController: UIViewController {
         mirrorCanvasView.onPointerEvent = { [weak self] kind, point in
             self?.sendPointerEvent(kind: kind, point: point)
         }
-        mirrorCanvasView.onScrollEvent = { [weak self] point, delta in
-            self?.sendScrollEvent(point: point, delta: delta)
+        mirrorCanvasView.onScrollEvent = { [weak self] point, delta, phase in
+            self?.sendScrollEvent(point: point, delta: delta, phase: phase)
         }
 
         toolbarView.onLayoutModeChanged = { [weak self] layoutMode in
@@ -249,7 +383,10 @@ final class iPhoneViewerViewController: UIViewController {
         streamClient.$latestFrameMask
             .receive(on: DispatchQueue.main)
             .sink { [weak self] mask in
-                self?.mirrorCanvasView.maskImage = mask
+                guard let self else { return }
+                mirrorCanvasView.maskImage = mask
+                currentFrameHasAlphaMask = mask != nil
+                updateInputMode()
             }
             .store(in: &cancellables)
 
@@ -275,8 +412,16 @@ final class iPhoneViewerViewController: UIViewController {
         streamClient.$windows
             .receive(on: DispatchQueue.main)
             .sink { [weak self] windows in
-                self?.toolbarView.windows = windows
-                self?.mirrorCanvasView.usesTouchDragForSingleFingerPan = windows.first(where: \.isSelected)?.isSimulator == true
+                guard let self else { return }
+                toolbarView.windows = windows
+                if let selectedWindow = windows.first(where: \.isSelected) {
+                    selectedWindowIsSimulator = selectedWindow.isSimulator
+                    hasSelectedWindowMetadata = true
+                } else {
+                    selectedWindowIsSimulator = false
+                    hasSelectedWindowMetadata = false
+                }
+                updateInputMode()
             }
             .store(in: &cancellables)
 
@@ -294,6 +439,13 @@ final class iPhoneViewerViewController: UIViewController {
                 self?.updateFrameRateOverlay()
             }
             .store(in: &cancellables)
+
+        streamClient.$developerActivity
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] activity in
+                self?.developerActivityBannerView.configure(activity: activity)
+            }
+            .store(in: &cancellables)
     }
 
     private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint) {
@@ -308,15 +460,22 @@ final class iPhoneViewerViewController: UIViewController {
         )
     }
 
-    private func sendScrollEvent(point: CGPoint, delta: CGPoint) {
+    private func sendScrollEvent(point: CGPoint, delta: CGPoint, phase: RemoteControlMessage.ScrollPhase) {
         nextSequenceNumber += 1
         streamClient.send(
             RemoteControlMessage(
                 scrollAt: point,
                 delta: delta,
+                phase: phase,
                 sequenceNumber: nextSequenceNumber
             )
         )
+    }
+
+    private func updateInputMode() {
+        mirrorCanvasView.usesTouchDragForSingleFingerPan = hasSelectedWindowMetadata
+            ? selectedWindowIsSimulator
+            : currentFrameHasAlphaMask
     }
 
     private func sendTextInput(_ text: String) {
@@ -337,6 +496,10 @@ final class iPhoneViewerViewController: UIViewController {
 
     private func selectWindow(_ window: RemoteWindowSummary) {
         resetFrameRateOverlay()
+        currentFrameHasAlphaMask = false
+        selectedWindowIsSimulator = window.isSimulator
+        hasSelectedWindowMetadata = true
+        updateInputMode()
         streamClient.clearCurrentFrame()
         nextSequenceNumber += 1
         streamClient.send(RemoteControlMessage(selectWindowID: window.id, sequenceNumber: nextSequenceNumber))
@@ -444,6 +607,9 @@ final class iPhoneViewerViewController: UIViewController {
         mirrorTrailingConstraint?.constant = isLandscape ? -max(16, view.safeAreaInsets.right + 16) : 0
         mirrorTopConstraint?.constant = isLandscape ? 0 : 76
         mirrorBottomConstraint?.constant = isLandscape ? 0 : -8
+        developerActivityTopConstraint?.constant = isLandscape ? 12 : 72
+        developerActivityLeadingConstraint?.constant = isLandscape ? max(84, view.safeAreaInsets.left + 84) : 16
+        developerActivityTrailingConstraint?.constant = isLandscape ? -max(20, view.safeAreaInsets.right + 20) : -16
     }
 
     private func setLayoutMode(_ layoutMode: MirrorLayoutMode) {
@@ -958,7 +1124,7 @@ private final class MirrorCanvasView: UIView {
     }
 
     var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
-    var onScrollEvent: (CGPoint, CGPoint) -> Void = { _, _ in }
+    var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private let scrollView = TwoFingerScrollView()
     private let contentView = UIView()
@@ -1019,8 +1185,8 @@ private final class MirrorCanvasView: UIView {
         pointerSurfaceView.onPointerEvent = { [weak self] kind, point in
             self?.onPointerEvent(kind, point)
         }
-        pointerSurfaceView.onScrollEvent = { [weak self] point, delta in
-            self?.onScrollEvent(point, delta)
+        pointerSurfaceView.onScrollEvent = { [weak self] point, delta, phase in
+            self?.onScrollEvent(point, delta, phase)
         }
 
         placeholderView.isUserInteractionEnabled = false
@@ -1298,7 +1464,7 @@ private final class PointerSurfaceView: UIView {
     var imageFrame: CGRect?
     var usesTouchDragForSingleFingerPan = false
     var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
-    var onScrollEvent: (CGPoint, CGPoint) -> Void = { _, _ in }
+    var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private enum PointerIntent {
         case idle
@@ -1316,6 +1482,8 @@ private final class PointerSurfaceView: UIView {
     private var lastTouchTimestamp: TimeInterval?
     private var lastScrollVelocity = CGPoint.zero
     private var lastScrollPoint: CGPoint?
+    private var scrollSamples: [ScrollSample] = []
+    private var hasSentScrollBegin = false
     private var lastPointerPoint: CGPoint?
     private var holdDownWorkItem: DispatchWorkItem?
     private var momentumGeneration = 0
@@ -1342,7 +1510,6 @@ private final class PointerSurfaceView: UIView {
         }
 
         let location = touch.location(in: self)
-        pointerIntent = .pendingTap
         initialTouchLocation = location
         lastTouchLocation = location
         lastTouchTimestamp = touch.timestamp
@@ -1350,6 +1517,16 @@ private final class PointerSurfaceView: UIView {
         lastPointerPoint = point
         lastScrollPoint = point
         lastScrollVelocity = .zero
+        scrollSamples = [ScrollSample(time: touch.timestamp, location: location)]
+        hasSentScrollBegin = false
+
+        if usesTouchDragForSingleFingerPan {
+            pointerIntent = .dragging
+            onPointerEvent(.pointerDown, point)
+            return
+        }
+
+        pointerIntent = .pendingTap
         scheduleHoldDown(at: point)
     }
 
@@ -1435,6 +1612,10 @@ private final class PointerSurfaceView: UIView {
             onPointerEvent(.pointerUp, lastPointerPoint)
         }
 
+        if case .scrolling = pointerIntent, hasSentScrollBegin, let lastScrollPoint {
+            onScrollEvent(lastScrollPoint, .zero, .cancelled)
+        }
+
         resetPointerState()
     }
 
@@ -1468,6 +1649,8 @@ private final class PointerSurfaceView: UIView {
         lastTouchTimestamp = nil
         lastScrollVelocity = .zero
         lastScrollPoint = nil
+        scrollSamples.removeAll()
+        hasSentScrollBegin = false
         lastPointerPoint = nil
     }
 
@@ -1485,6 +1668,7 @@ private final class PointerSurfaceView: UIView {
         self.lastTouchLocation = location
         self.lastTouchTimestamp = timestamp
         lastScrollPoint = point
+        recordScrollSample(time: timestamp, location: location)
 
         guard abs(movement.x) > 0.2 || abs(movement.y) > 0.2 else { return }
         let interval = max(timestamp - lastTouchTimestamp, 1.0 / 120.0)
@@ -1493,23 +1677,34 @@ private final class PointerSurfaceView: UIView {
             x: lastScrollVelocity.x * 0.35 + instantVelocity.x * 0.65,
             y: lastScrollVelocity.y * 0.35 + instantVelocity.y * 0.65
         )
-        sendScrollDelta(movement, at: point)
+        let phase: RemoteControlMessage.ScrollPhase = hasSentScrollBegin ? .changed : .began
+        hasSentScrollBegin = true
+        sendScrollDelta(movement, at: point, phase: phase)
     }
 
-    private func sendScrollDelta(_ movement: CGPoint, at point: CGPoint) {
-        let scrollSensitivity: CGFloat = 4.4
+    private func sendScrollDelta(
+        _ movement: CGPoint,
+        at point: CGPoint,
+        phase: RemoteControlMessage.ScrollPhase
+    ) {
+        let scrollSensitivity: CGFloat = 7.0
         onScrollEvent(
             point,
             CGPoint(
                 x: movement.x * scrollSensitivity,
                 y: movement.y * scrollSensitivity
-            )
+            ),
+            phase
         )
     }
 
     private func startScrollMomentum(at point: CGPoint) {
-        var velocity = lastScrollVelocity
-        let minimumVelocity: CGFloat = 70
+        var velocity = releaseScrollVelocity()
+        let minimumVelocity: CGFloat = 35
+        if hasSentScrollBegin {
+            onScrollEvent(point, .zero, .ended)
+        }
+
         guard hypot(velocity.x, velocity.y) >= minimumVelocity else {
             resetPointerState()
             return
@@ -1518,11 +1713,16 @@ private final class PointerSurfaceView: UIView {
         momentumGeneration &+= 1
         let generation = momentumGeneration
         let frameInterval: TimeInterval = 1.0 / 60.0
-        let decay: CGFloat = 0.91
+        let decay: CGFloat = 0.965
+        let momentumBoost: CGFloat = 1.55
+        velocity.x *= momentumBoost
+        velocity.y *= momentumBoost
+        var hasSentMomentumBegin = false
 
         func step(_ remainingSteps: Int) {
             guard generation == momentumGeneration else { return }
-            guard remainingSteps > 0, hypot(velocity.x, velocity.y) >= 8 else {
+            guard remainingSteps > 0, hypot(velocity.x, velocity.y) >= 4 else {
+                onScrollEvent(point, .zero, .momentumEnded)
                 resetPointerState()
                 return
             }
@@ -1531,7 +1731,12 @@ private final class PointerSurfaceView: UIView {
                 x: velocity.x * frameInterval,
                 y: velocity.y * frameInterval
             )
-            sendScrollDelta(movement, at: point)
+            sendScrollDelta(
+                movement,
+                at: point,
+                phase: hasSentMomentumBegin ? .momentumChanged : .momentumBegan
+            )
+            hasSentMomentumBegin = true
             velocity.x *= decay
             velocity.y *= decay
 
@@ -1540,11 +1745,39 @@ private final class PointerSurfaceView: UIView {
             }
         }
 
-        step(52)
+        step(150)
     }
 
     private func stopScrollMomentum() {
         momentumGeneration &+= 1
+    }
+
+    private func recordScrollSample(time: TimeInterval, location: CGPoint) {
+        scrollSamples.append(ScrollSample(time: time, location: location))
+        let cutoff = time - 0.16
+        scrollSamples.removeAll { $0.time < cutoff }
+    }
+
+    private func releaseScrollVelocity() -> CGPoint {
+        guard let newest = scrollSamples.last else { return lastScrollVelocity }
+
+        let minimumWindow: TimeInterval = 0.045
+        let oldest = scrollSamples.first { newest.time - $0.time <= 0.14 && newest.time - $0.time >= minimumWindow }
+            ?? scrollSamples.first
+
+        guard let oldest, newest.time > oldest.time else { return lastScrollVelocity }
+
+        let interval = CGFloat(newest.time - oldest.time)
+        let velocity = CGPoint(
+            x: (newest.location.x - oldest.location.x) / interval,
+            y: (newest.location.y - oldest.location.y) / interval
+        )
+
+        if hypot(velocity.x, velocity.y) > hypot(lastScrollVelocity.x, lastScrollVelocity.y) * 0.65 {
+            return velocity
+        }
+
+        return lastScrollVelocity
     }
 
     private func normalizedPoint(for location: CGPoint, allowsClamping: Bool) -> CGPoint? {
@@ -1565,6 +1798,11 @@ private final class PointerSurfaceView: UIView {
         guard let lastPointerPoint else { return true }
         return abs(lastPointerPoint.x - point.x) > 0.001 || abs(lastPointerPoint.y - point.y) > 0.001
     }
+}
+
+private struct ScrollSample {
+    var time: TimeInterval
+    var location: CGPoint
 }
 
 private final class StreamPlaceholderView: UIView {

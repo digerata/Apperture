@@ -9,6 +9,7 @@ enum RemoteFrameStreamConfiguration {
         case videoFrame = 4
         case videoMask = 5
         case streamDiagnostics = 6
+        case developerActivity = 7
     }
 
     static let bonjourType = "_apperture._tcp"

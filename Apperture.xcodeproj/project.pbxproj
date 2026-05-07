@@ -13,6 +13,9 @@
 		21660F004A1BA9156F2BE9E3 /* AppertureiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */; };
 		2C443664E333FB45F11E1746 /* RemoteVideoMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */; };
 		3E6DCE9AE39F4481BC01672F /* RemoteVideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ACF0CBF381379D651271968 /* RemoteVideoEncoder.swift */; };
+		1F91A6C8D5A44B0B9C5F0012 /* DeveloperActivityEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F91A6C8D5A44B0B9C5F0011 /* DeveloperActivityEvent.swift */; };
+		1F91A6C8D5A44B0B9C5F0013 /* DeveloperActivityEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F91A6C8D5A44B0B9C5F0011 /* DeveloperActivityEvent.swift */; };
+		1F91A6C8D5A44B0B9C5F0022 /* AgentEventBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F91A6C8D5A44B0B9C5F0021 /* AgentEventBridgeService.swift */; };
 		5BEE8011094E7A3E75C0E510 /* RemoteVideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFBF03B4BB057330F2A54409 /* RemoteVideoDecoder.swift */; };
 		5C78E0DCD1D9DDBA4E705DC9 /* RemoteInputInjectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */; };
 		5FFC5101E2CD8373594A9057 /* WindowDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */; };
@@ -45,6 +48,8 @@
 		118635A423B2D5C671F2B700 /* MacHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHostView.swift; sourceTree = "<group>"; };
 		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AppertureiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorLayoutMode.swift; sourceTree = "<group>"; };
+		1F91A6C8D5A44B0B9C5F0011 /* DeveloperActivityEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperActivityEvent.swift; sourceTree = "<group>"; };
+		1F91A6C8D5A44B0B9C5F0021 /* AgentEventBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentEventBridgeService.swift; sourceTree = "<group>"; };
 		29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWindowListMessage.swift; sourceTree = "<group>"; };
 		5C7D327FA47573B8779DBC37 /* WindowDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryService.swift; sourceTree = "<group>"; };
 		5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppertureMacApp.swift; sourceTree = "<group>"; };
@@ -89,6 +94,7 @@
 		6F842C65753AD273565151DF /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				1F91A6C8D5A44B0B9C5F0011 /* DeveloperActivityEvent.swift */,
 				1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */,
 				8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */,
 				953184A086EFB331049EC963 /* MirrorWindow.swift */,
@@ -114,6 +120,7 @@
 		F428736D4C46B143F4DCACEB /* Mac */ = {
 			isa = PBXGroup;
 			children = (
+				1F91A6C8D5A44B0B9C5F0021 /* AgentEventBridgeService.swift */,
 				5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */,
 				ECCC377F19F512CCBDE2F480 /* DesktopWallpaperService.swift */,
 				9E0E7F447051F528EC83AC40 /* HostModel.swift */,
@@ -237,6 +244,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				21660F004A1BA9156F2BE9E3 /* AppertureiOSApp.swift in Sources */,
+				1F91A6C8D5A44B0B9C5F0013 /* DeveloperActivityEvent.swift in Sources */,
 				8F4FF7F80754112B14E8F408 /* MirrorLayoutMode.swift in Sources */,
 				DABCACF858D6651EC0C8E411 /* MirrorSessionSnapshot.swift in Sources */,
 				A4C0DA92459830E4923D0677 /* MirrorWindow.swift in Sources */,
@@ -254,8 +262,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1F91A6C8D5A44B0B9C5F0022 /* AgentEventBridgeService.swift in Sources */,
 				7A7B12810B14781803D8876C /* AppertureMacApp.swift in Sources */,
 				CD8E3761A35AAB8B1D901349 /* DesktopWallpaperService.swift in Sources */,
+				1F91A6C8D5A44B0B9C5F0012 /* DeveloperActivityEvent.swift in Sources */,
 				9B546A58AA6C8B6B41CAC26C /* HostModel.swift in Sources */,
 				A2CBB3C89B37215BB4A65309 /* HostNetworkAddressService.swift in Sources */,
 				99F1158CE409E8521035C331 /* HostSettingsView.swift in Sources */,

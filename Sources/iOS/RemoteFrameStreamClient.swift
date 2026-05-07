@@ -15,6 +15,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var manualEndpointDescription: String?
     @Published private(set) var diagnostics = RemoteConnectionDiagnostics()
     @Published private(set) var streamDiagnostics: RemoteStreamDiagnosticsMessage?
+    @Published private(set) var developerActivity = DeveloperActivityState(eventDirectoryPath: "")
     let videoSampleBuffers = PassthroughSubject<CMSampleBuffer, Never>()
 
     private let queue = DispatchQueue(label: "com.mikewille.Apperture.frame-client")
@@ -85,6 +86,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         wallpaper = nil
         windows = []
         streamDiagnostics = nil
+        developerActivity = DeveloperActivityState(eventDirectoryPath: "")
         nextSequenceNumber = 0
         lastKeyFrameRequestTime = 0
         requiresVideoKeyFrame = false
@@ -476,6 +478,11 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             streamDiagnostics = message
+        case .developerActivity:
+            guard let event = try? JSONDecoder().decode(DeveloperActivityEvent.self, from: Data(imageData)) else {
+                return
+            }
+            developerActivity.apply(event)
         }
     }
 
@@ -501,6 +508,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         wallpaper = nil
         windows = []
         streamDiagnostics = nil
+        developerActivity = DeveloperActivityState(eventDirectoryPath: "")
         videoDecoder.reset()
         connection?.cancel()
         connection = nil

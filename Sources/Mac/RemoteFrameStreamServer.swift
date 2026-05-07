@@ -22,6 +22,7 @@ final class RemoteFrameStreamServer {
     private var videoMaskSize = CGSize.zero
     private var wallpaperPacket: Data?
     private var windowListPacket: Data?
+    private var developerActivityPacket: Data?
     private var streamGeneration: UInt64 = 0
     private var lastBackpressureKeyFrameRequestTime: CFAbsoluteTime = 0
     private var statusHandler: ((FrameServerStatus) -> Void)?
@@ -114,6 +115,7 @@ final class RemoteFrameStreamServer {
             self.videoMaskSize = .zero
             self.wallpaperPacket = nil
             self.windowListPacket = nil
+            self.developerActivityPacket = nil
             self.streamGeneration &+= 1
             self.lastBackpressureKeyFrameRequestTime = 0
             self.resetAdaptiveStreamSettings()
@@ -149,6 +151,17 @@ final class RemoteFrameStreamServer {
         queue.async {
             guard let packet = Self.makeWindowListPacket(windows) else { return }
             self.windowListPacket = packet
+
+            for id in self.readyConnectionIDs {
+                self.send(packet, to: id)
+            }
+        }
+    }
+
+    func publishDeveloperActivity(_ event: DeveloperActivityEvent) {
+        queue.async {
+            guard let packet = Self.makePacket(type: .developerActivity, message: event) else { return }
+            self.developerActivityPacket = packet
 
             for id in self.readyConnectionIDs {
                 self.send(packet, to: id)
@@ -307,6 +320,9 @@ final class RemoteFrameStreamServer {
             }
             if let windowListPacket {
                 send(windowListPacket, to: id)
+            }
+            if let developerActivityPacket {
+                send(developerActivityPacket, to: id)
             }
             if let videoFormatPacket {
                 send(videoFormatPacket, to: id)
@@ -679,7 +695,7 @@ final class RemoteFrameStreamServer {
             encodedData = image.hasAlpha ? makePNGData(from: image) : makeJPEGData(from: image)
         case .wallpaper:
             encodedData = makeJPEGData(from: image)
-        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics:
+        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity:
             return nil
         }
 

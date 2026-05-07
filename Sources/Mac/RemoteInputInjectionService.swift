@@ -23,7 +23,11 @@ final class RemoteInputInjectionService {
         case .scroll:
             prepareTargetForScroll(currentWindow, at: point)
             postMouseEvent(type: .mouseMoved, at: point, clickState: 0)
-            postScroll(deltaX: message.scrollDeltaX, deltaY: message.scrollDeltaY)
+            postScroll(
+                deltaX: message.scrollDeltaX,
+                deltaY: message.scrollDeltaY,
+                phase: message.scrollPhase ?? .changed
+            )
         case .textInput:
             guard let text = message.text, !text.isEmpty else { return }
             prepareTargetForKeyboardInput(currentWindow)
@@ -200,7 +204,11 @@ final class RemoteInputInjectionService {
         event.post(tap: .cghidEventTap)
     }
 
-    private func postScroll(deltaX: Double, deltaY: Double) {
+    private func postScroll(
+        deltaX: Double,
+        deltaY: Double,
+        phase: RemoteControlMessage.ScrollPhase
+    ) {
         let verticalDelta = Int32(max(min(deltaY, 320), -320))
         let horizontalDelta = Int32(max(min(deltaX, 320), -320))
         guard verticalDelta != 0 || horizontalDelta != 0,
@@ -285,6 +293,45 @@ private struct WindowStackEntry {
     var id: UInt32
     var processID: Int32
     var frame: CGRect
+}
+
+private extension RemoteControlMessage.ScrollPhase {
+    var scrollWheelPhase: NSEvent.Phase? {
+        switch self {
+        case .began:
+            return .began
+        case .changed:
+            return .changed
+        case .ended:
+            return .ended
+        case .cancelled:
+            return .cancelled
+        case .momentumBegan, .momentumChanged, .momentumEnded:
+            return nil
+        }
+    }
+
+    var scrollWheelMomentumPhase: NSEvent.Phase? {
+        switch self {
+        case .began, .changed, .ended, .cancelled:
+            return nil
+        case .momentumBegan:
+            return .began
+        case .momentumChanged:
+            return .changed
+        case .momentumEnded:
+            return .ended
+        }
+    }
+
+    var isTerminal: Bool {
+        switch self {
+        case .ended, .cancelled, .momentumEnded:
+            return true
+        case .began, .changed, .momentumBegan, .momentumChanged:
+            return false
+        }
+    }
 }
 
 private extension RemoteControlMessage.Key {

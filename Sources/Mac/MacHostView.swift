@@ -40,6 +40,7 @@ struct MacHostView: View {
 
                 PermissionSummaryView()
                 FrameServerSummaryView()
+                DeveloperActivitySummaryView()
             }
             .padding(20)
 
@@ -84,6 +85,103 @@ struct MacHostView: View {
                 }
             }
         }
+    }
+}
+
+private struct DeveloperActivitySummaryView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: symbolName)
+                    .foregroundStyle(symbolColor)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hostModel.developerActivity.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+
+                    Text(hostModel.developerActivity.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+
+            if let issueSummary = hostModel.developerActivity.issueSummary {
+                Text(issueSummary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(hostModel.developerActivity.latestEvent?.isFailure == true ? .red : .orange)
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Agent Events")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Text(hostModel.developerActivity.eventDirectoryPath)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer()
+
+                Button {
+                    hostModel.copyDeveloperActivityDirectory()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy agent events folder")
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var symbolName: String {
+        guard let event = hostModel.developerActivity.latestEvent else {
+            return "terminal"
+        }
+
+        if event.isFailure {
+            return "xmark.circle.fill"
+        }
+
+        switch event.kind {
+        case "buildStarted":
+            return "hammer.fill"
+        case "testStarted":
+            return "checkmark.seal"
+        case "appLaunched":
+            return "play.circle.fill"
+        case "simulatorBooted":
+            return "iphone.gen3"
+        default:
+            return "terminal.fill"
+        }
+    }
+
+    private var symbolColor: Color {
+        guard let event = hostModel.developerActivity.latestEvent else {
+            return .secondary
+        }
+
+        if event.isFailure {
+            return .red
+        }
+
+        return event.isActive ? .blue : .green
     }
 }
 

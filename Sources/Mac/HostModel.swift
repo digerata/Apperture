@@ -11,9 +11,13 @@ final class HostModel: ObservableObject {
     @Published private(set) var streamStatus: LiveStreamStatus = .idle
     @Published private(set) var frameServerStatus: FrameServerStatus = .offline
     @Published private(set) var connectionHints: [HostConnectionHint] = []
+    @Published private(set) var developerActivity = DeveloperActivityState(
+        eventDirectoryPath: AgentEventBridgeService.defaultEventDirectoryURL.path
+    )
     @Published private(set) var lastRefreshDate: Date?
 
     private let discoveryService = WindowDiscoveryService()
+    private let agentEventBridge = AgentEventBridgeService()
     private let liveCaptureService = LiveWindowCaptureService()
     private let frameServer = RemoteFrameStreamServer()
     private let inputInjectionService = RemoteInputInjectionService()
@@ -35,9 +39,16 @@ final class HostModel: ObservableObject {
                 }
             }
         )
+
+        agentEventBridge.start { [weak self] event in
+            Task { @MainActor in
+                self?.handleDeveloperActivity(event)
+            }
+        }
     }
 
     deinit {
+        agentEventBridge.stop()
         frameServer.stop()
     }
 
@@ -91,6 +102,11 @@ final class HostModel: ObservableObject {
     func copyConnectionHint(_ hint: HostConnectionHint) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(hint.endpointText, forType: .string)
+    }
+
+    func copyDeveloperActivityDirectory() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(developerActivity.eventDirectoryPath, forType: .string)
     }
 
     func startLiveView() {
@@ -187,6 +203,33 @@ final class HostModel: ObservableObject {
         }
     }
 
+    private func handleDeveloperActivity(_ event: DeveloperActivityEvent) {
+        developerActivity.apply(event)
+        frameServer.publishDeveloperActivity(event)
+
+        guard event.kind == "appLaunched" else { return }
+        selectLaunchedTarget(from: event)
+    }
+
+    private func selectLaunchedTarget(from event: DeveloperActivityEvent) {
+        refreshWindows()
+
+        if let processID = event.pid,
+           let launchedWindow = windows.first(where: { $0.processID == Int32(processID) }) {
+            selectedWindowID = launchedWindow.id
+            publishWindowList()
+            restartLiveViewIfNeeded()
+            return
+        }
+
+        if event.platform == "simulator",
+           let simulatorWindow = windows.first(where: \.isLikelySimulator) {
+            selectedWindowID = simulatorWindow.id
+            publishWindowList()
+            restartLiveViewIfNeeded()
+        }
+    }
+
     private func selectRemoteWindow(_ windowID: MirrorWindow.ID) {
         refreshWindows()
         guard windows.contains(where: { $0.id == windowID }) else {
@@ -200,6 +243,11 @@ final class HostModel: ObservableObject {
         if streamStatus.isRunning {
             startLiveView()
         }
+    }
+
+    private func restartLiveViewIfNeeded() {
+        guard streamStatus.isRunning else { return }
+        startLiveView()
     }
 
     private func publishWindowList() {
