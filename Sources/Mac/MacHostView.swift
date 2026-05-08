@@ -41,6 +41,9 @@ struct MacHostView: View {
                 PermissionSummaryView()
                 FrameServerSummaryView()
                 DeveloperActivitySummaryView()
+                if hostModel.windowShapeProbeState.isVisible {
+                    WindowShapeProbeSummaryView()
+                }
             }
             .padding(20)
 
@@ -84,6 +87,84 @@ struct MacHostView: View {
                     .padding(24)
                 }
             }
+        }
+    }
+}
+
+private struct WindowShapeProbeSummaryView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: symbolName)
+                    .foregroundStyle(symbolColor)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hostModel.windowShapeProbeState.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+
+                    Text(hostModel.windowShapeProbeState.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+
+            if let outputDirectoryURL = hostModel.windowShapeProbeState.outputDirectoryURL {
+                Divider()
+
+                HStack(spacing: 8) {
+                    Text(outputDirectoryURL.path)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Spacer()
+
+                    Button {
+                        hostModel.revealWindowShapeProbeOutput()
+                    } label: {
+                        Image(systemName: "folder")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Reveal probe output")
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var symbolName: String {
+        switch hostModel.windowShapeProbeState {
+        case .idle:
+            return "camera.metering.matrix"
+        case .running:
+            return "camera.metering.center.weighted"
+        case .completed:
+            return "checkmark.circle.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var symbolColor: Color {
+        switch hostModel.windowShapeProbeState {
+        case .idle:
+            return .secondary
+        case .running:
+            return .blue
+        case .completed:
+            return .green
+        case .failed:
+            return .orange
         }
     }
 }
@@ -479,6 +560,14 @@ private struct HostToolbarView: View {
             }
 
             Spacer()
+
+            Button {
+                hostModel.runWindowShapeProbe()
+            } label: {
+                Label("Probe Shape", systemImage: "camera.metering.matrix")
+            }
+            .disabled(hostModel.selectedWindow == nil || hostModel.windowShapeProbeState.isRunning)
+            .help("Capture window shape variants")
 
             Button {
                 if hostModel.streamStatus.isRunning {

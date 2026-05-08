@@ -24,7 +24,6 @@ final class RemoteFrameStreamServer {
     private var wallpaperPacket: Data?
     private var windowListPacket: Data?
     private var appIconPackets: [String: Data] = [:]
-    private var developerActivityPacket: Data?
     private var streamGeneration: UInt64 = 0
     private var lastBackpressureKeyFrameRequestTime: CFAbsoluteTime = 0
     private var statusHandler: ((FrameServerStatus) -> Void)?
@@ -117,7 +116,6 @@ final class RemoteFrameStreamServer {
             self.videoMaskSize = .zero
             self.wallpaperPacket = nil
             self.windowListPacket = nil
-            self.developerActivityPacket = nil
             self.streamGeneration &+= 1
             self.lastBackpressureKeyFrameRequestTime = 0
             self.resetAdaptiveStreamSettings()
@@ -178,7 +176,6 @@ final class RemoteFrameStreamServer {
     func publishDeveloperActivity(_ event: DeveloperActivityEvent) {
         queue.async {
             guard let packet = Self.makePacket(type: .developerActivity, message: event) else { return }
-            self.developerActivityPacket = packet
 
             for id in self.readyConnectionIDs {
                 self.send(packet, to: id)
@@ -343,9 +340,6 @@ final class RemoteFrameStreamServer {
             }
             for packet in appIconPackets.values {
                 send(packet, to: id)
-            }
-            if let developerActivityPacket {
-                send(developerActivityPacket, to: id)
             }
             if let videoFormatPacket {
                 send(videoFormatPacket, to: id)

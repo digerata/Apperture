@@ -38,6 +38,7 @@ final class AgentEventBridgeService {
     func start(onEvent: @escaping (DeveloperActivityEvent) -> Void) {
         stop()
         ensureEventDirectoryExists()
+        Self.removeEventFiles(in: eventDirectoryURL, fileManager: fileManager)
         processedFileNames.removeAll()
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -102,16 +103,32 @@ final class AgentEventBridgeService {
             if let event = try? decoder.decode(DeveloperActivityEvent.self, from: data) {
                 events.append(event)
                 processedFileNames.insert(fileURL.lastPathComponent)
+                try? fileManager.removeItem(at: fileURL)
                 continue
             }
 
             if let decodedEvents = try? decoder.decode([DeveloperActivityEvent].self, from: data) {
                 events.append(contentsOf: decodedEvents)
                 processedFileNames.insert(fileURL.lastPathComponent)
+                try? fileManager.removeItem(at: fileURL)
             }
         }
 
         return events
+    }
+
+    private static func removeEventFiles(in eventDirectoryURL: URL, fileManager: FileManager) {
+        guard let fileURLs = try? fileManager.contentsOfDirectory(
+            at: eventDirectoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        for fileURL in fileURLs where fileURL.pathExtension.localizedCaseInsensitiveCompare("json") == .orderedSame {
+            try? fileManager.removeItem(at: fileURL)
+        }
     }
 
     private static func modificationDate(for fileURL: URL) -> Date {

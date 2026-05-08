@@ -18,6 +18,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var streamDiagnostics: RemoteStreamDiagnosticsMessage?
     @Published private(set) var developerActivity = DeveloperActivityState(eventDirectoryPath: "")
     let videoSampleBuffers = PassthroughSubject<CMSampleBuffer, Never>()
+    var currentHostID: String? { activeCandidateID }
 
     private let queue = DispatchQueue(label: "com.mikewille.Apperture.frame-client")
     private var browser: NWBrowser?
@@ -31,6 +32,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     private var activeCandidateID: String?
     private var savedManualEndpoints: [ManualStreamEndpoint] = []
     private var appIconCache: [String: Data] = [:]
+    private var consecutiveConnectionFailures = 0
     private let videoDecoder = RemoteVideoDecoder()
     private var nextSequenceNumber: UInt64 = 0
     private var lastKeyFrameRequestTime: CFAbsoluteTime = 0
@@ -84,6 +86,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection = nil
         candidates = []
         nextCandidateIndex = 0
+        consecutiveConnectionFailures = 0
         connectedHostName = nil
         activeCandidateID = nil
         latestFrame = nil
@@ -179,6 +182,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection = nil
         connectedHostName = nil
         activeCandidateID = nil
+        consecutiveConnectionFailures = 0
         streamDecodeGeneration += 1
         nextCandidateIndex = 0
         rebuildCandidates(from: browseResults)
@@ -210,6 +214,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection = nil
         connectedHostName = nil
         activeCandidateID = nil
+        consecutiveConnectionFailures = 0
         streamDecodeGeneration += 1
         nextCandidateIndex = 0
         rebuildCandidates(from: browseResults)
@@ -297,7 +302,9 @@ final class RemoteFrameStreamClient: ObservableObject {
                     .sorted()
             }
             self.recordDiagnosticEvent("Bonjour results changed: \(results.count) service\(results.count == 1 ? "" : "s").")
-            self.connectToNextCandidate()
+            if self.retryWorkItem == nil {
+                self.connectToNextCandidate()
+            }
         }
     }
 
@@ -430,7 +437,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         }
         recordDiagnosticEvent("Connecting to \(candidate.diagnosticDescription).")
 
-        let connection = NWConnection(to: candidate.endpoint, using: .tcp)
+        let connection = NWConnection(to: candidate.endpoint, using: Self.connectionParameters())
         self.connection = connection
 
         connection.stateUpdateHandler = { [weak self, weak connection] state in
@@ -449,6 +456,7 @@ final class RemoteFrameStreamClient: ObservableObject {
                 self.timeoutWorkItem?.cancel()
                 self.timeoutWorkItem = nil
                 let hostName = self.connectedHostName ?? "Mac"
+                self.consecutiveConnectionFailures = 0
                 self.state = .connected(hostName)
                 self.recordDiagnosticEvent("Connection ready: \(hostName).")
                 self.receiveLength()
@@ -670,6 +678,7 @@ final class RemoteFrameStreamClient: ObservableObject {
             diagnostics.lastError = message
             diagnostics.activeCandidate = nil
         }
+        consecutiveConnectionFailures += 1
         recordDiagnosticEvent("Connection failed: \(message)")
 
         guard browser != nil else {
@@ -685,15 +694,23 @@ final class RemoteFrameStreamClient: ObservableObject {
 
     private func scheduleRetry() {
         retryWorkItem?.cancel()
+        let delay = retryDelay(forFailureCount: consecutiveConnectionFailures)
 
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor in
+                self?.retryWorkItem = nil
                 self?.connectToNextCandidate()
             }
         }
 
         retryWorkItem = workItem
-        queue.asyncAfter(deadline: .now() + 0.8, execute: workItem)
+        recordDiagnosticEvent("Retrying connection in \(String(format: "%.1f", delay))s.")
+        queue.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func retryDelay(forFailureCount failureCount: Int) -> TimeInterval {
+        let delays: [TimeInterval] = [1.0, 2.0, 4.0, 8.0, 15.0, 30.0]
+        return delays[min(max(failureCount - 1, 0), delays.count - 1)]
     }
 
     private func scheduleTimeout(for connection: NWConnection, candidate: StreamEndpointCandidate) {
@@ -757,6 +774,19 @@ final class RemoteFrameStreamClient: ObservableObject {
         return parameters
     }
 
+    private static func connectionParameters() -> NWParameters {
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 15
+        tcpOptions.keepaliveInterval = 10
+        tcpOptions.keepaliveCount = 3
+
+        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
+        parameters.includePeerToPeer = true
+        return parameters
+    }
+
     private static func isTransientDiscoveryResolutionFailure(_ message: String) -> Bool {
         message.localizedCaseInsensitiveContains("NoSuchRecord") ||
             message.contains("-65554")
@@ -808,7 +838,7 @@ enum RemoteFrameStreamState: Equatable {
         case .idle:
             return "Remote viewer idle."
         case .searching:
-            return "Looking for Apperture. Use Connect to Mac for Tailscale."
+            return "Looking for Apperture. Add a host for Tailscale or direct connections."
         case .connecting(let host):
             return "Connecting to \(host)."
         case .connected(let host):
@@ -838,6 +868,13 @@ enum RemoteFrameStreamState: Equatable {
         case .idle, .failed:
             return false
         }
+    }
+
+    var hasVisibleApp: Bool {
+        if case .live = self {
+            return true
+        }
+        return false
     }
 }
 

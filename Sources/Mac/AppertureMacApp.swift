@@ -48,6 +48,11 @@ private struct HostMenuBarView: View {
                     hostModel.startLiveView()
                 }
             }
+
+            Button("Run Shape Probe") {
+                hostModel.runWindowShapeProbe()
+            }
+            .disabled(hostModel.windowShapeProbeState.isRunning)
         }
 
         Divider()

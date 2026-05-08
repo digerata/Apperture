@@ -127,6 +127,43 @@ private final class DeveloperActivityBannerView: UIView {
     }
 }
 
+private struct ViewerResumeTarget: Codable, Equatable {
+    var hostID: String
+    var windowID: UInt32
+    var appGroupID: String
+    var savedAt: Date
+
+    var isValid: Bool {
+        Date().timeIntervalSince(savedAt) <= Self.resumeWindow
+    }
+
+    func store() {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+    }
+
+    static func load() -> ViewerResumeTarget? {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let target = try? JSONDecoder().decode(ViewerResumeTarget.self, from: data) else {
+            return nil
+        }
+
+        guard target.isValid else {
+            clear()
+            return nil
+        }
+
+        return target
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+    }
+
+    private static let defaultsKey = "AppertureViewer.resumeTarget"
+    private static let resumeWindow: TimeInterval = 10 * 60
+}
+
 final class iPhoneViewerViewController: UIViewController {
     private let streamClient = RemoteFrameStreamClient()
     private var cancellables = Set<AnyCancellable>()
@@ -142,6 +179,7 @@ final class iPhoneViewerViewController: UIViewController {
     private let keyboardInputView = KeyboardInputView()
     private let fpsOverlayLabel = PaddedLabel()
     private let developerActivityBannerView = DeveloperActivityBannerView()
+    private var developerActivityDismissWorkItem: DispatchWorkItem?
     private var currentDefaultLayoutMode: MirrorLayoutMode?
     private var mirrorLeadingConstraint: NSLayoutConstraint?
     private var mirrorTrailingConstraint: NSLayoutConstraint?
@@ -162,6 +200,13 @@ final class iPhoneViewerViewController: UIViewController {
     private var isDismissingLauncherForSelectedStream = false
     private var hasPendingSelectedStreamFrame = false
     private var isAwaitingWindowList = false
+    private var isPresentingAppLauncher = false
+    private var appLauncherPresentationGeneration = 0
+    private var currentSelectedWindowID: UInt32?
+    private var currentSelectedWindow: RemoteWindowSummary?
+    private var pendingResumeTarget: ViewerResumeTarget?
+    private var resumeDeadlineWorkItem: DispatchWorkItem?
+    private var backgroundTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
     private var recentAppIDs = UserDefaults.standard.stringArray(forKey: "RecentMirroredAppIDs") ?? []
     private var isVideoDebugEnabled = UserDefaults.standard.bool(forKey: "VideoDebugOverlayEnabled") {
         didSet {
@@ -195,7 +240,14 @@ final class iPhoneViewerViewController: UIViewController {
         configureSubviews()
         configureCallbacks()
         bindStreamClient()
+        configureLifecycleObservers()
         streamClient.start()
+        beginResumeIfAvailable()
+    }
+
+    deinit {
+        resumeDeadlineWorkItem?.cancel()
+        NotificationCenter.default.removeObserver(self)
     }
 
     override func viewDidLayoutSubviews() {
@@ -378,14 +430,6 @@ final class iPhoneViewerViewController: UIViewController {
             isKeyboardPresented.toggle()
         }
 
-        toolbarView.onManualConnectTapped = { [weak self] in
-            self?.presentManualConnectAlert()
-        }
-
-        toolbarView.onForgetManualEndpointTapped = { [weak self] in
-            self?.streamClient.forgetManualEndpoint()
-        }
-
         toolbarView.onDisconnectTapped = { [weak self] in
             self?.disconnectFromHost()
         }
@@ -406,6 +450,21 @@ final class iPhoneViewerViewController: UIViewController {
         keyboardInputView.onKeyPress = { [weak self] key in
             self?.sendKeyPress(key)
         }
+    }
+
+    private func configureLifecycleObservers() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
     }
 
     private func bindStreamClient() {
@@ -470,6 +529,7 @@ final class iPhoneViewerViewController: UIViewController {
                 } else {
                     hasRequestedStreamForCurrentConnection = false
                 }
+                attemptPendingResume()
                 updateFlowOverlays()
             }
             .store(in: &cancellables)
@@ -481,12 +541,17 @@ final class iPhoneViewerViewController: UIViewController {
                 isAwaitingWindowList = false
                 toolbarView.windows = windows
                 if let selectedWindow = windows.first(where: \.isSelected) {
+                    currentSelectedWindowID = selectedWindow.id
+                    currentSelectedWindow = selectedWindow
                     selectedWindowIsSimulator = selectedWindow.isSimulator
                     hasSelectedWindowMetadata = true
                 } else {
+                    currentSelectedWindowID = nil
+                    currentSelectedWindow = nil
                     selectedWindowIsSimulator = false
                     hasSelectedWindowMetadata = false
                 }
+                attemptPendingResume()
                 refreshAppLauncher()
                 updateInputMode()
                 updateFlowOverlays()
@@ -496,15 +561,10 @@ final class iPhoneViewerViewController: UIViewController {
         streamClient.$hosts
             .receive(on: DispatchQueue.main)
             .sink { [weak self] hosts in
-                self?.hostConnectionView.hosts = hosts
-                self?.updateFlowOverlays()
-            }
-            .store(in: &cancellables)
-
-        streamClient.$manualEndpointDescription
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] endpoint in
-                self?.toolbarView.manualEndpointDescription = endpoint
+                guard let self else { return }
+                hostConnectionView.hosts = hosts
+                attemptPendingResume()
+                updateFlowOverlays()
             }
             .store(in: &cancellables)
 
@@ -519,9 +579,171 @@ final class iPhoneViewerViewController: UIViewController {
         streamClient.$developerActivity
             .receive(on: DispatchQueue.main)
             .sink { [weak self] activity in
-                self?.developerActivityBannerView.configure(activity: activity)
+                self?.showDeveloperActivity(activity)
             }
             .store(in: &cancellables)
+    }
+
+    private func showDeveloperActivity(_ activity: DeveloperActivityState) {
+        developerActivityDismissWorkItem?.cancel()
+        developerActivityBannerView.layer.removeAllAnimations()
+        developerActivityBannerView.alpha = 1
+        developerActivityBannerView.configure(activity: activity)
+
+        guard activity.latestEvent != nil else { return }
+
+        let dismissWorkItem = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.18) {
+                self?.developerActivityBannerView.alpha = 0
+            } completion: { _ in
+                self?.developerActivityBannerView.isHidden = true
+                self?.developerActivityBannerView.alpha = 1
+            }
+        }
+
+        developerActivityDismissWorkItem = dismissWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: dismissWorkItem)
+    }
+
+    @objc private func applicationDidEnterBackground() {
+        persistResumeTarget()
+        beginSessionBackgroundTaskIfNeeded()
+    }
+
+    @objc private func applicationWillEnterForeground() {
+        endSessionBackgroundTask()
+        beginResumeIfAvailable()
+    }
+
+    private func beginSessionBackgroundTaskIfNeeded() {
+        guard backgroundTaskIdentifier == .invalid else { return }
+        guard streamClient.currentHostID != nil else { return }
+
+        backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(
+            withName: "Apperture Session Grace"
+        ) { [weak self] in
+            guard let self else { return }
+            persistResumeTarget()
+            endSessionBackgroundTask()
+        }
+    }
+
+    private func endSessionBackgroundTask() {
+        guard backgroundTaskIdentifier != .invalid else { return }
+        let identifier = backgroundTaskIdentifier
+        backgroundTaskIdentifier = .invalid
+        UIApplication.shared.endBackgroundTask(identifier)
+    }
+
+    private func beginResumeIfAvailable() {
+        guard let target = ViewerResumeTarget.load(), target.isValid else { return }
+        pendingResumeTarget = target
+        scheduleResumeDeadline()
+
+        switch streamClient.state {
+        case .idle, .failed:
+            streamClient.restart()
+        case .searching, .connecting, .connected, .live:
+            break
+        }
+
+        attemptPendingResume()
+        updateFlowOverlays()
+    }
+
+    private func persistResumeTarget() {
+        guard let hostID = streamClient.currentHostID,
+              let window = currentSelectedWindow else {
+            return
+        }
+
+        ViewerResumeTarget(
+            hostID: hostID,
+            windowID: window.id,
+            appGroupID: window.appGroupID,
+            savedAt: Date()
+        )
+        .store()
+    }
+
+    private func scheduleResumeDeadline() {
+        resumeDeadlineWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, pendingResumeTarget != nil else { return }
+            pendingResumeTarget = nil
+            isWaitingForSelectedStream = false
+            isDismissingLauncherForSelectedStream = false
+            hasPendingSelectedStreamFrame = false
+            mirrorCanvasView.defersAutomaticContentArrival = false
+            updateFlowOverlays()
+        }
+        resumeDeadlineWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: workItem)
+    }
+
+    private func attemptPendingResume() {
+        guard let target = pendingResumeTarget else { return }
+        guard target.isValid else {
+            pendingResumeTarget = nil
+            updateFlowOverlays()
+            return
+        }
+
+        if streamClient.currentHostID != target.hostID,
+           streamClient.hosts.contains(where: { $0.id == target.hostID }) {
+            streamClient.connect(toHostID: target.hostID)
+            return
+        }
+
+        switch streamClient.state {
+        case .idle, .failed:
+            streamClient.restart()
+        case .searching, .connecting:
+            break
+        case .connected:
+            requestWindowList()
+        case .live:
+            pendingResumeTarget = nil
+            resumeDeadlineWorkItem?.cancel()
+            loadingInterstitialView.setVisible(false, animated: view.window != nil)
+        }
+
+        guard streamClient.currentHostID == target.hostID else { return }
+        guard let window = streamClient.windows.first(where: { $0.id == target.windowID })
+            ?? streamClient.windows.first(where: { $0.appGroupID == target.appGroupID }) else {
+            return
+        }
+
+        selectWindowForResume(window)
+    }
+
+    private func selectWindowForResume(_ window: RemoteWindowSummary) {
+        pendingResumeTarget = nil
+        resumeDeadlineWorkItem?.cancel()
+
+        if window.id == currentSelectedWindowID {
+            currentSelectedWindow = window
+            loadingInterstitialView.setVisible(false, animated: view.window != nil)
+            updateFlowOverlays()
+            return
+        }
+
+        isAppLauncherPresented = false
+        isWaitingForSelectedStream = true
+        isDismissingLauncherForSelectedStream = false
+        hasPendingSelectedStreamFrame = false
+        currentSelectedWindowID = window.id
+        currentSelectedWindow = window
+        selectedWindowIsSimulator = window.isSimulator
+        hasSelectedWindowMetadata = true
+        currentFrameHasAlphaMask = false
+        updateInputMode()
+        mirrorCanvasView.prepareForAppSwitch()
+        mirrorCanvasView.defersAutomaticContentArrival = true
+        streamClient.prepareForStreamSelection()
+        nextSequenceNumber += 1
+        streamClient.send(RemoteControlMessage(selectWindowID: window.id, sequenceNumber: nextSequenceNumber))
+        updateFlowOverlays()
     }
 
     private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint) {
@@ -592,6 +814,15 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func updateFlowOverlays() {
+        if pendingResumeTarget != nil {
+            hostConnectionView.setVisible(false, animated: view.window != nil)
+            appLauncherView.setVisible(false, animated: view.window != nil)
+            loadingInterstitialView.setVisible(true, animated: view.window != nil)
+            mirrorCanvasView.alpha = 0
+            mirrorCanvasView.isUserInteractionEnabled = false
+            return
+        }
+
         if isWaitingForSelectedStream {
             switch streamClient.state {
             case .idle, .searching, .connecting, .failed:
@@ -614,6 +845,15 @@ final class iPhoneViewerViewController: UIViewController {
                 animated: view.window != nil
             )
             mirrorCanvasView.alpha = 0
+            mirrorCanvasView.isUserInteractionEnabled = false
+            return
+        }
+
+        if isPresentingAppLauncher {
+            hostConnectionView.setVisible(false, animated: view.window != nil)
+            appLauncherView.setVisible(false, animated: view.window != nil)
+            loadingInterstitialView.setVisible(false, animated: view.window != nil)
+            mirrorCanvasView.alpha = 1
             mirrorCanvasView.isUserInteractionEnabled = false
             return
         }
@@ -650,16 +890,30 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func presentAppLauncherFromToolbar() {
+        guard !isWaitingForSelectedStream else { return }
+        guard !isPresentingAppLauncher else { return }
+
+        if isAppLauncherPresented {
+            dismissAppLauncherToCurrentApp(animated: true)
+            return
+        }
+
         switch streamClient.state {
         case .connected:
+            appLauncherPresentationGeneration += 1
             isAppLauncherPresented = true
             requestWindowList()
             updateFlowOverlays()
         case .live:
+            appLauncherPresentationGeneration += 1
+            let generation = appLauncherPresentationGeneration
+            isPresentingAppLauncher = true
             requestWindowList()
             mirrorCanvasView.isUserInteractionEnabled = false
-            mirrorCanvasView.departForAppSwitch { [weak self] in
+            mirrorCanvasView.departForAppLauncher { [weak self] in
                 guard let self else { return }
+                guard generation == self.appLauncherPresentationGeneration else { return }
+                self.isPresentingAppLauncher = false
                 self.isAppLauncherPresented = true
                 self.updateFlowOverlays()
             }
@@ -669,6 +923,21 @@ final class iPhoneViewerViewController: UIViewController {
         case .searching, .connecting:
             updateFlowOverlays()
         }
+    }
+
+    private func dismissAppLauncherToCurrentApp(animated: Bool) {
+        appLauncherPresentationGeneration += 1
+        isPresentingAppLauncher = false
+        isAppLauncherPresented = false
+        isWaitingForSelectedStream = false
+        isDismissingLauncherForSelectedStream = false
+        hasPendingSelectedStreamFrame = false
+        mirrorCanvasView.defersAutomaticContentArrival = false
+        loadingInterstitialView.setVisible(false, animated: view.window != nil)
+        appLauncherView.setVisible(false, animated: animated && view.window != nil)
+        mirrorCanvasView.alpha = 1
+        mirrorCanvasView.isUserInteractionEnabled = true
+        updateFlowOverlays()
     }
 
     private func rememberAppSelection(_ window: RemoteWindowSummary) {
@@ -683,11 +952,22 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func selectWindow(_ window: RemoteWindowSummary) {
+        if window.id == currentSelectedWindowID {
+            currentSelectedWindow = window
+            rememberAppSelection(window)
+            dismissAppLauncherToCurrentApp(animated: true)
+            return
+        }
+
+        appLauncherPresentationGeneration += 1
+        isPresentingAppLauncher = false
         isAppLauncherPresented = false
         isWaitingForSelectedStream = true
         isDismissingLauncherForSelectedStream = true
         hasPendingSelectedStreamFrame = false
         rememberAppSelection(window)
+        currentSelectedWindowID = window.id
+        currentSelectedWindow = window
         resetFrameRateOverlay()
         currentFrameHasAlphaMask = false
         selectedWindowIsSimulator = window.isSimulator
@@ -841,6 +1121,11 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func disconnectFromHost() {
+        pendingResumeTarget = nil
+        resumeDeadlineWorkItem?.cancel()
+        endSessionBackgroundTask()
+        ViewerResumeTarget.clear()
+        isPresentingAppLauncher = false
         isAppLauncherPresented = false
         isWaitingForSelectedStream = false
         isDismissingLauncherForSelectedStream = false
@@ -857,34 +1142,6 @@ final class iPhoneViewerViewController: UIViewController {
         case .searching, .connecting, .connected, .live:
             streamClient.stop()
         }
-    }
-
-    private func presentManualConnectAlert() {
-        let alert = UIAlertController(
-            title: "Connect to Mac",
-            message: "Enter the Mac's Tailscale IP, MagicDNS name, or hostname.",
-            preferredStyle: .alert
-        )
-        alert.addTextField { [weak self] textField in
-            textField.placeholder = "100.x.y.z or mac-name"
-            textField.text = self?.streamClient.manualEndpointDescription
-            textField.autocapitalizationType = .none
-            textField.autocorrectionType = .no
-            textField.clearButtonMode = .whileEditing
-            textField.keyboardType = .URL
-            textField.returnKeyType = .go
-        }
-
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Connect", style: .default) { [weak self, weak alert] _ in
-            guard let self else { return }
-            let input = alert?.textFields?.first?.text ?? ""
-            if let errorMessage = streamClient.connectManually(to: input) {
-                presentManualConnectError(errorMessage)
-            }
-        })
-
-        present(alert, animated: true)
     }
 
     private func presentManualConnectError(_ message: String) {
@@ -1430,6 +1687,7 @@ private final class AppLauncherOverlayView: UIView {
     private var groups: [RemoteApplicationWindowGroup] = []
     private var recentGroupIDs = Set<String>()
     private var selectedGroup: RemoteApplicationWindowGroup?
+    private var visibilityGeneration = 0
 
     override init(frame: CGRect) {
         let layout = UICollectionViewFlowLayout()
@@ -1467,6 +1725,9 @@ private final class AppLauncherOverlayView: UIView {
     }
 
     func setVisible(_ visible: Bool, animated: Bool, completion: (() -> Void)? = nil) {
+        visibilityGeneration += 1
+        let generation = visibilityGeneration
+
         guard visible != !isHidden || alpha != (visible ? 1 : 0) else {
             completion?()
             return
@@ -1483,6 +1744,7 @@ private final class AppLauncherOverlayView: UIView {
         }
 
         let animationCompletion: (Bool) -> Void = { _ in
+            guard generation == self.visibilityGeneration else { return }
             self.isHidden = !visible
             completion?()
         }
@@ -1905,18 +2167,11 @@ private final class ViewerToolbarView: UIView {
 
     var onAppLauncherTapped: () -> Void = {}
     var onKeyboardTapped: () -> Void = {}
-    var onManualConnectTapped: () -> Void = {}
-    var onForgetManualEndpointTapped: () -> Void = {}
     var onDisconnectTapped: () -> Void = {}
     var onDiagnosticsTapped: () -> Void = {}
     var onVideoDebugToggled: () -> Void = {}
     var onLayoutModeChanged: (MirrorLayoutMode) -> Void = { _ in }
     var windows: [RemoteWindowSummary] = []
-    var manualEndpointDescription: String? {
-        didSet {
-            updateSettingsMenu()
-        }
-    }
 
     private var layoutMode: MirrorLayoutMode = .fitHeight
     var isVideoDebugEnabled = false {
@@ -2025,25 +2280,34 @@ private final class ViewerToolbarView: UIView {
     }
 
     private func updateSettingsMenu() {
-        settingsButton.menu = UIMenu(
-            children: [
+        var menus: [UIMenuElement] = []
+
+        if streamState.hasVisibleApp {
+            menus.append(
                 UIMenu(
                     title: "View",
                     options: .displayInline,
                     children: layoutMenuActions()
-                ),
+                )
+            )
+            menus.append(
                 UIMenu(
                     title: "Debug",
                     options: .displayInline,
                     children: debugMenuActions()
-                ),
-                UIMenu(
-                    title: "Connection",
-                    options: .displayInline,
-                    children: settingsConnectionActions()
                 )
-            ]
+            )
+        }
+
+        menus.append(
+            UIMenu(
+                title: "Connection",
+                options: .displayInline,
+                children: settingsConnectionActions()
+            )
         )
+
+        settingsButton.menu = UIMenu(children: menus)
     }
 
     private func layoutMenuActions() -> [UIMenuElement] {
@@ -2073,27 +2337,7 @@ private final class ViewerToolbarView: UIView {
     }
 
     private func settingsConnectionActions() -> [UIMenuElement] {
-        var actions: [UIMenuElement] = [
-            UIAction(
-                title: "Connect to Mac",
-                subtitle: manualEndpointDescription,
-                image: UIImage(systemName: "network")
-            ) { [weak self] _ in
-                self?.onManualConnectTapped()
-            }
-        ]
-
-        if manualEndpointDescription != nil {
-            actions.append(
-                UIAction(
-                    title: "Forget Direct Mac",
-                    image: UIImage(systemName: "xmark.circle"),
-                    attributes: .destructive
-                ) { [weak self] _ in
-                    self?.onForgetManualEndpointTapped()
-                }
-            )
-        }
+        var actions: [UIMenuElement] = []
 
         if streamState.canDisconnect {
             actions.append(
@@ -2294,6 +2538,7 @@ private final class MirrorCanvasView: UIView {
     func departForAppSwitch(completion: @escaping () -> Void) {
         prepareForAppSwitch()
         departureCompletion = completion
+        clearsContentAfterDeparture = true
 
         if image != nil {
             image = nil
@@ -2302,6 +2547,19 @@ private final class MirrorCanvasView: UIView {
         } else {
             runDepartureCompletion()
         }
+    }
+
+    func departForAppLauncher(completion: @escaping () -> Void) {
+        prepareForAppSwitch()
+        departureCompletion = completion
+        clearsContentAfterDeparture = false
+
+        guard hasContent else {
+            runDepartureCompletion()
+            return
+        }
+
+        animateContentDeparture()
     }
 
     func revealDeferredContentArrivalForAppSwitch() {
@@ -2331,6 +2589,7 @@ private final class MirrorCanvasView: UIView {
     private var isSynchronizingRenderMode = false
     private var isAnimatingDeparture = false
     private var departureCompletion: (() -> Void)?
+    private var clearsContentAfterDeparture = true
     private var pendingTransitionStyle: MirrorContentTransitionStyle = .normal
     private var nextSwitchDirection: CGFloat = 1
     private var transitionGeneration = 0
@@ -2594,7 +2853,10 @@ private final class MirrorCanvasView: UIView {
         guard !renderPivotView.isHidden else {
             guard generation == transitionGeneration else { return }
             isAnimatingDeparture = false
-            clearDepartedContent()
+            if clearsContentAfterDeparture {
+                clearDepartedContent()
+            }
+            clearsContentAfterDeparture = true
             setRenderRasterizationEnabled(false)
             pointerSurfaceView.isUserInteractionEnabled = true
             updateContentVisibility()
@@ -2614,13 +2876,28 @@ private final class MirrorCanvasView: UIView {
             },
             completion: { _ in
                 guard generation == self.transitionGeneration else {
+                    let shouldCompletePreservedDeparture = !self.clearsContentAfterDeparture
                     self.isAnimatingDeparture = false
+                    self.clearsContentAfterDeparture = true
+                    self.renderPivotView.alpha = 1
+                    self.renderPivotView.layer.transform = CATransform3DIdentity
+                    self.renderSurfaceView.alpha = 1
+                    self.renderSurfaceView.transform = .identity
                     self.setRenderRasterizationEnabled(false)
                     self.updateImageMask()
+                    if shouldCompletePreservedDeparture {
+                        self.pointerSurfaceView.isUserInteractionEnabled = true
+                        self.updateContentVisibility()
+                        self.updateScrollableContent(resetOffsetIfNeeded: false)
+                        self.runDepartureCompletion()
+                    }
                     return
                 }
                 self.isAnimatingDeparture = false
-                self.clearDepartedContent()
+                if self.clearsContentAfterDeparture {
+                    self.clearDepartedContent()
+                }
+                self.clearsContentAfterDeparture = true
                 self.renderPivotView.alpha = 1
                 self.renderPivotView.layer.transform = CATransform3DIdentity
                 self.renderSurfaceView.alpha = 1
