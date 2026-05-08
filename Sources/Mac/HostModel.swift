@@ -25,6 +25,7 @@ final class HostModel: ObservableObject {
     private let wallpaperService = DesktopWallpaperService()
     private let windowShapeProbeService = WindowShapeProbeService()
     private let networkAddressService = HostNetworkAddressService()
+    private let liveFramePreviewScheduler = LiveFramePreviewScheduler()
     private var latestCaptureScreenFrame: CGRect?
 
     init() {
@@ -119,6 +120,9 @@ final class HostModel: ObservableObject {
 
         streamStatus = .starting(window.displayTitle)
         let captureMode: LiveCaptureMode = window.isLikelySimulator ? .simulator : .window
+        let frameServer = self.frameServer
+        let liveFramePreviewScheduler = self.liveFramePreviewScheduler
+        liveFramePreviewScheduler.reset()
         frameServer.resetVideoStream()
         if let wallpaper = wallpaperService.wallpaperImage(for: window) {
             frameServer.publishWallpaper(wallpaper)
@@ -129,24 +133,37 @@ final class HostModel: ObservableObject {
                 if let bootstrapFrame = await LiveWindowCaptureService.bootstrapFrame(for: window, mode: captureMode) {
                     liveFrame = bootstrapFrame.previewImage
                     latestCaptureScreenFrame = bootstrapFrame.screenFrame
-                    frameServer.publish(bootstrapFrame, includeAlphaMask: window.isLikelySimulator)
+                    frameServer.publish(bootstrapFrame, includeAlphaMask: true)
                 }
 
                 try await liveCaptureService.start(
                     windowID: window.id,
                     mode: captureMode,
-                    onFrame: { [weak self] frame in
+                    shouldProcessFrame: { [frameServer] in
+                        frameServer.reserveFrameSlot()
+                    },
+                    onFrame: { [weak self, frameServer, liveFramePreviewScheduler] frame in
+                        frameServer.publish(frame, includeAlphaMask: true, frameSlotReserved: true)
+
+                        guard liveFramePreviewScheduler.reserveSlot() else { return }
+                        let previewImage = frame.previewImage
+                        let screenFrame = frame.screenFrame
+
                         Task { @MainActor in
-                            if let image = frame.previewImage {
+                            defer {
+                                liveFramePreviewScheduler.completeSlot()
+                            }
+
+                            if let image = previewImage {
                                 self?.liveFrame = image
                             }
-                            self?.latestCaptureScreenFrame = frame.screenFrame
-                            self?.frameServer.publish(frame, includeAlphaMask: window.isLikelySimulator)
+                            self?.latestCaptureScreenFrame = screenFrame
                             self?.streamStatus = .live(window.displayTitle)
                         }
                     },
                     onStop: { [weak self] error in
                         Task { @MainActor in
+                            self?.liveFramePreviewScheduler.reset()
                             self?.liveFrame = nil
                             self?.latestCaptureScreenFrame = nil
                             self?.frameServer.resetVideoStream()
@@ -160,6 +177,7 @@ final class HostModel: ObservableObject {
                 )
                 streamStatus = .live(window.displayTitle)
             } catch {
+                liveFramePreviewScheduler.reset()
                 liveFrame = nil
                 latestCaptureScreenFrame = nil
                 frameServer.resetVideoStream()
@@ -172,6 +190,7 @@ final class HostModel: ObservableObject {
     func stopLiveView() {
         Task {
             await liveCaptureService.stop()
+            liveFramePreviewScheduler.reset()
             liveFrame = nil
             latestCaptureScreenFrame = nil
             frameServer.resetVideoStream()
@@ -334,6 +353,38 @@ final class HostModel: ObservableObject {
                 )
             }
         }
+    }
+}
+
+private final class LiveFramePreviewScheduler {
+    private let lock = NSLock()
+    private let minimumInterval: CFAbsoluteTime = 1.0 / 6.0
+    private var nextPreviewTime: CFAbsoluteTime = 0
+    private var updateInFlight = false
+
+    func reserveSlot() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        guard !updateInFlight, now >= nextPreviewTime else { return false }
+
+        updateInFlight = true
+        nextPreviewTime = now + minimumInterval
+        return true
+    }
+
+    func completeSlot() {
+        lock.lock()
+        updateInFlight = false
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        nextPreviewTime = 0
+        updateInFlight = false
+        lock.unlock()
     }
 }
 

@@ -385,7 +385,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture;
 				PRODUCT_NAME = Apperture;
 				SDKROOT = macosx;
 			};
@@ -491,7 +491,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.landmk1.apperture;
 				PRODUCT_NAME = Apperture;
 				SDKROOT = macosx;
 			};

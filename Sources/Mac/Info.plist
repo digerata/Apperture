@@ -26,6 +26,8 @@
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright 2026</string>
+	<key>NSFileProviderDomainUsageDescription</key>
+	<string>Apperture reads your desktop picture so mirrored windows can appear over the same background on your iPhone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Apperture publishes a private local stream for your paired iPhone.</string>
 </dict>

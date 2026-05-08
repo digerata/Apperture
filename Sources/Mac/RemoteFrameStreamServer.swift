@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 
 final class RemoteFrameStreamServer {
     private let queue = DispatchQueue(label: "com.mikewille.Apperture.frame-server")
+    private let frameAdmissionLock = NSLock()
     private var listener: NWListener?
     private var connections: [UUID: NWConnection] = [:]
     private var readyConnectionIDs: Set<UUID> = []
@@ -35,6 +36,7 @@ final class RemoteFrameStreamServer {
     private var sentFrameCount = 0
     private var encodedByteCount = 0
     private var droppedFrameCount = 0
+    private var congestionDroppedFrameCount = 0
     private var backpressureKeyFrameRequestCount = 0
     private var directFrameCount = 0
     private var capturePrepMilliseconds = 0.0
@@ -46,6 +48,8 @@ final class RemoteFrameStreamServer {
     private var encoderQueueMilliseconds = 0.0
     private var lastCaptureSize = CGSize.zero
     private var lastEncodedSize = CGSize.zero
+    private var nextFrameAdmissionTime: CFAbsoluteTime = 0
+    private var admissionFrameRate = RemoteFrameStreamConfiguration.targetFrameRate
     private var adaptiveBitRate = RemoteFrameStreamConfiguration.videoBitRate
     private var adaptiveQuality = RemoteFrameStreamConfiguration.videoQuality
     private var adaptiveFrameRate = RemoteFrameStreamConfiguration.targetFrameRate
@@ -117,6 +121,8 @@ final class RemoteFrameStreamServer {
             self.wallpaperPacket = nil
             self.windowListPacket = nil
             self.streamGeneration &+= 1
+            self.lastFrameTime = 0
+            self.resetFrameAdmission()
             self.lastBackpressureKeyFrameRequestTime = 0
             self.resetAdaptiveStreamSettings()
             self.resetDiagnosticsWindow()
@@ -126,6 +132,8 @@ final class RemoteFrameStreamServer {
     }
 
     func resetVideoStream() {
+        resetFrameAdmission()
+
         queue.async {
             self.streamGeneration &+= 1
             self.lastFrameTime = 0
@@ -135,6 +143,7 @@ final class RemoteFrameStreamServer {
             self.videoMaskSize = .zero
             self.pendingFramePackets.removeAll()
             self.connectionsNeedingKeyFrame.removeAll()
+            self.resetFrameAdmission()
             self.lastBackpressureKeyFrameRequestTime = 0
             self.resetAdaptiveStreamSettings()
             self.resetDiagnosticsWindow()
@@ -206,71 +215,92 @@ final class RemoteFrameStreamServer {
         )
     }
 
-    func publish(_ frame: LiveCaptureFrame, includeAlphaMask: Bool = false) {
+    func reserveFrameSlot() -> Bool {
+        reserveFrameAdmissionSlot()
+    }
+
+    func publish(_ frame: LiveCaptureFrame, includeAlphaMask: Bool = false, frameSlotReserved: Bool = false) {
+        guard frameSlotReserved || reserveFrameAdmissionSlot() else { return }
+
         queue.async {
-            let now = CFAbsoluteTimeGetCurrent()
-            guard now - self.lastFrameTime >= 1.0 / self.adaptiveFrameRate else { return }
-            self.lastFrameTime = now
-            let generation = self.streamGeneration
+            autoreleasepool {
+                self.lastFrameTime = CFAbsoluteTimeGetCurrent()
+                let generation = self.streamGeneration
 
-            guard frame.pixelSize.width > 0, frame.pixelSize.height > 0 else { return }
-            self.recordCaptureTiming(frame.timing, size: frame.pixelSize)
+                guard frame.pixelSize.width > 0, frame.pixelSize.height > 0 else { return }
+                self.recordCaptureTiming(frame.timing, size: frame.pixelSize)
 
-            if includeAlphaMask, let image = frame.image, image.hasAlpha {
-                let imageSize = CGSize(width: image.width, height: image.height)
-                if self.videoMaskPacket == nil || self.videoMaskSize != imageSize,
-                   let maskPacket = Self.makeAlphaMaskPacket(from: image) {
-                    self.videoMaskPacket = maskPacket
-                    self.videoMaskSize = imageSize
-                    for id in self.readyConnectionIDs {
-                        self.send(maskPacket, to: id)
-                    }
-                }
-            } else if self.videoMaskPacket != nil {
-                self.videoMaskPacket = nil
-                self.videoMaskSize = .zero
-                if let maskPacket = Self.makeEmptyMaskPacket() {
-                    for id in self.readyConnectionIDs {
-                        self.send(maskPacket, to: id)
-                    }
-                }
-            }
-
-            let outputHandler: RemoteVideoEncoder.OutputHandler = { [weak self] output in
-                guard let self else { return }
-                self.queue.async {
-                    guard generation == self.streamGeneration else { return }
-
-                    switch output {
-                    case .format(let message):
-                        guard let packet = Self.makePacket(type: .videoFormat, message: message) else { return }
-                        self.videoFormatPacket = packet
-                        for id in self.readyConnectionIDs {
-                            self.send(packet, to: id)
+                let frameSize = frame.pixelSize
+                if includeAlphaMask {
+                    if self.videoMaskSize != frameSize {
+                        self.videoMaskPacket = nil
+                        self.videoMaskSize = frameSize
+                        guard let maskPacket = Self.makeAlphaMaskPacket(from: frame) else {
+                            if let emptyMaskPacket = Self.makeEmptyMaskPacket() {
+                                for id in self.readyConnectionIDs {
+                                    self.send(emptyMaskPacket, to: id)
+                                }
+                            }
+                            self.encode(frame, generation: generation)
+                            return
                         }
-                    case .frame(let message, let timing):
-                        guard let packet = Self.makeVideoFramePacket(message) else { return }
-                        let framePacket = PendingFramePacket(data: packet, isKeyFrame: message.isKeyFrame)
-                        self.encodedFrameCount += 1
-                        self.encodedByteCount += message.data.count
-                        self.pixelBufferMilliseconds += timing.pixelBufferMilliseconds
-                        self.encodeMilliseconds += timing.encodeMilliseconds
-                        self.encoderQueueMilliseconds += timing.queueWaitMilliseconds
-                        self.lastEncodedSize = frame.pixelSize
-                        self.lastPacket = framePacket
+
+                        self.videoMaskPacket = maskPacket
                         for id in self.readyConnectionIDs {
-                            self.sendFrame(framePacket, to: id)
+                            self.send(maskPacket, to: id)
                         }
-                        self.publishDiagnosticsIfNeeded()
+                    }
+                } else if self.videoMaskPacket != nil || self.videoMaskSize != .zero {
+                    self.videoMaskPacket = nil
+                    self.videoMaskSize = .zero
+                    if let maskPacket = Self.makeEmptyMaskPacket() {
+                        for id in self.readyConnectionIDs {
+                            self.send(maskPacket, to: id)
+                        }
                     }
                 }
-            }
 
-            if let pixelBuffer = frame.pixelBuffer {
-                self.videoEncoder.encode(pixelBuffer, outputHandler: outputHandler)
-            } else if let image = frame.image {
-                self.videoEncoder.encode(image, outputHandler: outputHandler)
+                self.encode(frame, generation: generation)
             }
+        }
+    }
+
+    private func encode(_ frame: LiveCaptureFrame, generation: UInt64) {
+        let frameSize = frame.pixelSize
+        let outputHandler: RemoteVideoEncoder.OutputHandler = { [weak self] output in
+            guard let self else { return }
+            self.queue.async {
+                guard generation == self.streamGeneration else { return }
+
+                switch output {
+                case .format(let message):
+                    guard let packet = Self.makePacket(type: .videoFormat, message: message) else { return }
+                    self.videoFormatPacket = packet
+                    for id in self.readyConnectionIDs {
+                        self.send(packet, to: id)
+                    }
+                case .frame(let message, let timing):
+                    guard let packet = Self.makeVideoFramePacket(message) else { return }
+                    let framePacket = PendingFramePacket(data: packet, isKeyFrame: message.isKeyFrame)
+                    self.encodedFrameCount += 1
+                    self.encodedByteCount += message.data.count
+                    self.pixelBufferMilliseconds += timing.pixelBufferMilliseconds
+                    self.encodeMilliseconds += timing.encodeMilliseconds
+                    self.encoderQueueMilliseconds += timing.queueWaitMilliseconds
+                    self.lastEncodedSize = frameSize
+                    self.lastPacket = framePacket
+                    for id in self.readyConnectionIDs {
+                        self.sendFrame(framePacket, to: id)
+                    }
+                    self.publishDiagnosticsIfNeeded()
+                }
+            }
+        }
+
+        if let pixelBuffer = frame.pixelBuffer {
+            videoEncoder.encode(pixelBuffer, outputHandler: outputHandler)
+        } else if let image = frame.image {
+            videoEncoder.encode(image, outputHandler: outputHandler)
         }
     }
 
@@ -406,6 +436,7 @@ final class RemoteFrameStreamServer {
 
         if pendingFramePackets[id] != nil {
             droppedFrameCount += 1
+            congestionDroppedFrameCount += 1
             connectionsNeedingKeyFrame.insert(id)
             requestBackpressureKeyFrameIfNeeded()
             guard packet.isKeyFrame else { return }
@@ -428,6 +459,31 @@ final class RemoteFrameStreamServer {
         lastBackpressureKeyFrameRequestTime = now
         backpressureKeyFrameRequestCount += 1
         videoEncoder.requestKeyFrame()
+    }
+
+    private func reserveFrameAdmissionSlot() -> Bool {
+        frameAdmissionLock.lock()
+        defer { frameAdmissionLock.unlock() }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let minimumInterval = 1.0 / max(admissionFrameRate, 1)
+        guard now >= nextFrameAdmissionTime else { return false }
+
+        nextFrameAdmissionTime = now + minimumInterval
+        return true
+    }
+
+    private func resetFrameAdmission() {
+        frameAdmissionLock.lock()
+        admissionFrameRate = RemoteFrameStreamConfiguration.targetFrameRate
+        nextFrameAdmissionTime = 0
+        frameAdmissionLock.unlock()
+    }
+
+    private func updateFrameAdmissionRate(_ frameRate: Double) {
+        frameAdmissionLock.lock()
+        admissionFrameRate = frameRate
+        frameAdmissionLock.unlock()
     }
 
     private func drainFrameSend(for id: UUID) {
@@ -545,8 +601,7 @@ final class RemoteFrameStreamServer {
         let encodedFPS = Double(encodedFrameCount) / duration
         let sentFPS = Double(sentFrameCount) / duration
         adaptStreamIfNeeded(
-            droppedFrames: droppedFrameCount,
-            backpressureKeyFrames: backpressureKeyFrameRequestCount,
+            congestionDroppedFrames: congestionDroppedFrameCount,
             encodedFPS: encodedFPS,
             sentFPS: sentFPS
         )
@@ -588,6 +643,7 @@ final class RemoteFrameStreamServer {
         sentFrameCount = 0
         encodedByteCount = 0
         droppedFrameCount = 0
+        congestionDroppedFrameCount = 0
         backpressureKeyFrameRequestCount = 0
         directFrameCount = 0
         capturePrepMilliseconds = 0
@@ -600,13 +656,12 @@ final class RemoteFrameStreamServer {
     }
 
     private func adaptStreamIfNeeded(
-        droppedFrames: Int,
-        backpressureKeyFrames: Int,
+        congestionDroppedFrames: Int,
         encodedFPS: Double,
         sentFPS: Double
     ) {
         let sendRatio = encodedFPS > 0 ? sentFPS / encodedFPS : 1
-        let isCongested = droppedFrames > 0 || backpressureKeyFrames > 0 || sendRatio < 0.82
+        let isCongested = congestionDroppedFrames > 0 || sendRatio < 0.82
 
         if isCongested {
             cleanAdaptiveWindowCount = 0
@@ -677,6 +732,7 @@ final class RemoteFrameStreamServer {
         adaptiveBitRate = clampedBitRate
         adaptiveQuality = clampedQuality
         adaptiveFrameRate = clampedFrameRate
+        updateFrameAdmissionRate(clampedFrameRate)
         videoEncoder.updateAdaptiveSettings(
             bitRate: clampedBitRate,
             quality: clampedQuality,
@@ -692,6 +748,7 @@ final class RemoteFrameStreamServer {
         sentFrameCount = 0
         encodedByteCount = 0
         droppedFrameCount = 0
+        congestionDroppedFrameCount = 0
         backpressureKeyFrameRequestCount = 0
         directFrameCount = 0
         capturePrepMilliseconds = 0
@@ -775,6 +832,18 @@ final class RemoteFrameStreamServer {
         return packet
     }
 
+    private static func makeAlphaMaskPacket(from frame: LiveCaptureFrame) -> Data? {
+        if let image = frame.image, image.hasAlpha {
+            return makeAlphaMaskPacket(from: image)
+        }
+
+        if let pixelBuffer = frame.pixelBuffer {
+            return makeAlphaMaskPacket(from: pixelBuffer)
+        }
+
+        return nil
+    }
+
     private static func makeAlphaMaskPacket(from image: CGImage) -> Data? {
         let width = image.width
         let height = image.height
@@ -796,21 +865,84 @@ final class RemoteFrameStreamServer {
 
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        guard let roundedClipAlpha = makeRoundedClipAlpha(width: width, height: height) else {
-            return nil
-        }
-
         var maskPixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        var hasTransparentPixels = false
         for y in 0..<height {
             for x in 0..<width {
                 let sourceOffset = y * bytesPerRow + x * bytesPerPixel + 3
                 let maskOffset = y * bytesPerRow + x * bytesPerPixel
-                let alpha = min(pixels[sourceOffset], roundedClipAlpha[y * width + x])
+                let alpha = pixels[sourceOffset]
+                hasTransparentPixels = hasTransparentPixels || alpha < 255
                 maskPixels[maskOffset] = alpha
                 maskPixels[maskOffset + 1] = alpha
                 maskPixels[maskOffset + 2] = alpha
                 maskPixels[maskOffset + 3] = alpha
             }
+        }
+
+        return makeAlphaMaskPacket(
+            fromMaskPixels: &maskPixels,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            hasTransparentPixels: hasTransparentPixels
+        )
+    }
+
+    private static func makeAlphaMaskPacket(from pixelBuffer: CVPixelBuffer) -> Data? {
+        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return nil
+        }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let sourceBytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let bytesPerPixel = 4
+        let maskBytesPerRow = width * bytesPerPixel
+        let sourceBytes = baseAddress.assumingMemoryBound(to: UInt8.self)
+        var maskPixels = [UInt8](repeating: 0, count: height * maskBytesPerRow)
+        var hasTransparentPixels = false
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let sourceOffset = y * sourceBytesPerRow + x * bytesPerPixel + 3
+                let maskOffset = y * maskBytesPerRow + x * bytesPerPixel
+                let alpha = sourceBytes[sourceOffset]
+                hasTransparentPixels = hasTransparentPixels || alpha < 255
+                maskPixels[maskOffset] = alpha
+                maskPixels[maskOffset + 1] = alpha
+                maskPixels[maskOffset + 2] = alpha
+                maskPixels[maskOffset + 3] = alpha
+            }
+        }
+
+        return makeAlphaMaskPacket(
+            fromMaskPixels: &maskPixels,
+            width: width,
+            height: height,
+            bytesPerRow: maskBytesPerRow,
+            hasTransparentPixels: hasTransparentPixels
+        )
+    }
+
+    private static func makeAlphaMaskPacket(
+        fromMaskPixels maskPixels: inout [UInt8],
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        hasTransparentPixels: Bool
+    ) -> Data? {
+        guard hasTransparentPixels else {
+            return nil
         }
 
         guard let maskContext = CGContext(
@@ -841,28 +973,6 @@ final class RemoteFrameStreamServer {
         var packet = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
         packet.append(payload)
         return packet
-    }
-
-    private static func makeRoundedClipAlpha(width: Int, height: Int) -> [UInt8]? {
-        var alpha = [UInt8](repeating: 0, count: width * height)
-        guard let context = CGContext(
-            data: &alpha,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width,
-            space: CGColorSpaceCreateDeviceGray(),
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else {
-            return nil
-        }
-
-        let rect = CGRect(x: 0, y: 0, width: width, height: height)
-        let cornerRadius = min(CGFloat(width), CGFloat(height)) * 0.095
-        context.setFillColor(gray: 1, alpha: 1)
-        context.addPath(CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil))
-        context.fillPath()
-        return alpha
     }
 
     private static func makeJPEGData(from image: CGImage) -> Data? {

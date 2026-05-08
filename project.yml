@@ -20,7 +20,7 @@ targets:
       - path: Sources/Mac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.landmk1.apperture.mac
+        PRODUCT_BUNDLE_IDENTIFIER: com.landmk1.apperture
         DEVELOPMENT_TEAM: VY76D5S364
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: Apple Development

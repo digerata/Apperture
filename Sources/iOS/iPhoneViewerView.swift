@@ -2585,6 +2585,7 @@ private final class MirrorCanvasView: UIView {
     private let imageMaskLayer = CALayer()
     private let pointerSurfaceView = PointerSurfaceView()
     private var lastShadowBounds = CGRect.zero
+    private var lastShadowCornerRadius: CGFloat = -1
     private var lastContentSize = CGSize.zero
     private var isSynchronizingRenderMode = false
     private var isAnimatingDeparture = false
@@ -2641,14 +2642,14 @@ private final class MirrorCanvasView: UIView {
         shadowView.layer.rasterizationScale = UIScreen.main.scale
 
         videoRenderView.clipsToBounds = true
-        videoRenderView.layer.cornerRadius = 8
+        videoRenderView.layer.cornerRadius = fallbackRenderCornerRadius
         videoRenderView.layer.cornerCurve = .continuous
         videoRenderView.isUserInteractionEnabled = false
         videoRenderView.isHidden = true
 
         imageView.contentMode = .scaleAspectFit
         imageView.clipsToBounds = true
-        imageView.layer.cornerRadius = 8
+        imageView.layer.cornerRadius = fallbackRenderCornerRadius
         imageView.layer.cornerCurve = .continuous
         imageView.isUserInteractionEnabled = false
 
@@ -2744,13 +2745,7 @@ private final class MirrorCanvasView: UIView {
         pointerSurfaceView.frame = contentView.bounds
         pointerSurfaceView.imageFrame = hasContent ? frame : nil
 
-        if shadowView.bounds != lastShadowBounds {
-            lastShadowBounds = shadowView.bounds
-            shadowView.layer.shadowPath = UIBezierPath(
-                roundedRect: shadowView.bounds,
-                cornerRadius: renderCornerRadius
-            ).cgPath
-        }
+        updateShadowPathIfNeeded()
 
         CATransaction.commit()
 
@@ -2770,6 +2765,7 @@ private final class MirrorCanvasView: UIView {
 
         imageView.layer.mask = nil
         videoRenderView.layer.mask = nil
+        updateRenderCornerRadius()
 
         guard let maskImage, let targetLayer = activeRenderLayer else {
             return
@@ -2782,6 +2778,34 @@ private final class MirrorCanvasView: UIView {
         imageMaskLayer.contentsGravity = .resize
         targetLayer.mask = imageMaskLayer
         CATransaction.commit()
+    }
+
+    private func updateRenderCornerRadius() {
+        let cornerRadius = maskImage == nil ? fallbackRenderCornerRadius : 0
+        guard videoRenderView.layer.cornerRadius != cornerRadius ||
+              imageView.layer.cornerRadius != cornerRadius else {
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        videoRenderView.layer.cornerRadius = cornerRadius
+        imageView.layer.cornerRadius = cornerRadius
+        CATransaction.commit()
+        updateShadowPathIfNeeded()
+    }
+
+    private func updateShadowPathIfNeeded() {
+        guard shadowView.bounds != lastShadowBounds || renderCornerRadius != lastShadowCornerRadius else {
+            return
+        }
+
+        lastShadowBounds = shadowView.bounds
+        lastShadowCornerRadius = renderCornerRadius
+        shadowView.layer.shadowPath = UIBezierPath(
+            roundedRect: shadowView.bounds,
+            cornerRadius: renderCornerRadius
+        ).cgPath
     }
 
     private func updateContentVisibility() {
@@ -3031,6 +3055,10 @@ private final class MirrorCanvasView: UIView {
 
     private var renderCornerRadius: CGFloat {
         videoRenderView.layer.cornerRadius
+    }
+
+    private var fallbackRenderCornerRadius: CGFloat {
+        8
     }
 
     private var scrollsHorizontally: Bool {

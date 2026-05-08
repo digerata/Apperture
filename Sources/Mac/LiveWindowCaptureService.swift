@@ -61,6 +61,7 @@ enum LiveCaptureMode {
 final class LiveWindowCaptureService: NSObject {
     private let outputQueue = DispatchQueue(label: "com.mikewille.Apperture.live-capture")
     private var stream: SCStream?
+    private var shouldProcessFrame: (() -> Bool)?
     private var frameHandler: ((LiveCaptureFrame) -> Void)?
     private var stopHandler: ((Error) -> Void)?
     private var fallbackScreenFrame: CGRect?
@@ -105,6 +106,7 @@ final class LiveWindowCaptureService: NSObject {
     func start(
         windowID: CGWindowID,
         mode: LiveCaptureMode = .window,
+        shouldProcessFrame: @escaping () -> Bool = { true },
         onFrame: @escaping (LiveCaptureFrame) -> Void,
         onStop: @escaping (Error) -> Void
     ) async throws {
@@ -123,6 +125,7 @@ final class LiveWindowCaptureService: NSObject {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
 
         self.stream = stream
+        self.shouldProcessFrame = shouldProcessFrame
         frameHandler = onFrame
         stopHandler = onStop
         fallbackScreenFrame = window.frame
@@ -150,6 +153,7 @@ final class LiveWindowCaptureService: NSObject {
 
         try? stream.removeStreamOutput(self, type: .screen)
         self.stream = nil
+        shouldProcessFrame = nil
         frameHandler = nil
         stopHandler = nil
         fallbackScreenFrame = nil
@@ -171,7 +175,7 @@ final class LiveWindowCaptureService: NSObject {
         configuration.showsCursor = true
         configuration.ignoreShadowsSingleWindow = true
         configuration.ignoreGlobalClipSingleWindow = true
-        configuration.shouldBeOpaque = true
+        configuration.shouldBeOpaque = false
         return configuration
     }
 
@@ -205,40 +209,43 @@ final class LiveWindowCaptureService: NSObject {
 
 extension LiveWindowCaptureService: SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        let frameStart = DispatchTime.now().uptimeNanoseconds
-        guard type == .screen else { return }
-        guard CMSampleBufferIsValid(sampleBuffer) else { return }
-        guard Self.isCompleteFrame(sampleBuffer) else { return }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        autoreleasepool {
+            let frameStart = DispatchTime.now().uptimeNanoseconds
+            guard type == .screen else { return }
+            guard CMSampleBufferIsValid(sampleBuffer) else { return }
+            guard Self.isCompleteFrame(sampleBuffer) else { return }
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            guard shouldProcessFrame?() ?? true else { return }
 
-        if RemoteFrameStreamConfiguration.enablesDirectCapturePixelBufferEncoding,
-           let directFrame = Self.makeDirectFrame(
-            from: pixelBuffer,
-            sampleBuffer: sampleBuffer,
-            fallbackScreenFrame: fallbackScreenFrame,
-            mode: captureMode,
-            frameStart: frameStart
-        ) {
-            frameHandler?(directFrame)
-            return
-        }
-
-        let cgImageStart = DispatchTime.now().uptimeNanoseconds
-        var image: CGImage?
-        let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &image)
-        let cgImageMilliseconds = Self.milliseconds(from: cgImageStart)
-
-        guard status == noErr, let image else { return }
-        frameHandler?(
-            Self.makeFrame(
-                from: image,
+            if RemoteFrameStreamConfiguration.enablesDirectCapturePixelBufferEncoding,
+               let directFrame = Self.makeDirectFrame(
+                from: pixelBuffer,
                 sampleBuffer: sampleBuffer,
                 fallbackScreenFrame: fallbackScreenFrame,
                 mode: captureMode,
-                frameStart: frameStart,
-                cgImageMilliseconds: cgImageMilliseconds
+                frameStart: frameStart
+            ) {
+                frameHandler?(directFrame)
+                return
+            }
+
+            let cgImageStart = DispatchTime.now().uptimeNanoseconds
+            var image: CGImage?
+            let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &image)
+            let cgImageMilliseconds = Self.milliseconds(from: cgImageStart)
+
+            guard status == noErr, let image else { return }
+            frameHandler?(
+                Self.makeFrame(
+                    from: image,
+                    sampleBuffer: sampleBuffer,
+                    fallbackScreenFrame: fallbackScreenFrame,
+                    mode: captureMode,
+                    frameStart: frameStart,
+                    cgImageMilliseconds: cgImageMilliseconds
+                )
             )
-        )
+        }
     }
 
     private static func isCompleteFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
@@ -463,9 +470,15 @@ extension LiveWindowCaptureService: SCStreamOutput {
         image: CGImage,
         mode: LiveCaptureMode
     ) -> CGRect? {
-        if mode == .simulator, let simulatorCropRect = simulatorDeviceCropRect(in: image) {
+        if mode == .simulator {
             let imageRect = CGRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height)
-            return simulatorCropRect.intersection(imageRect)
+            if let simulatorCropRect = simulatorDeviceAlphaCropRect(in: image) {
+                return simulatorCropRect.intersection(imageRect)
+            }
+
+            if let simulatorCropRect = simulatorDeviceCropRect(in: image) {
+                return simulatorCropRect.intersection(imageRect)
+            }
         }
 
         guard let attachments else { return nil }
@@ -642,6 +655,127 @@ extension LiveWindowCaptureService: SCStreamOutput {
         }
 
         return rect
+    }
+
+    private static func simulatorDeviceAlphaCropRect(in image: CGImage) -> CGRect? {
+        let width = image.width
+        let height = image.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let sampleStep = max(1, min(width, height) / 360)
+        let topSearchLimit = max(height / 3, 1)
+        let visibleAlphaThreshold: UInt8 = 8
+        let minimumVisibleSamplesPerRow = max(8, width / (18 * sampleStep))
+        let maximumGapSamplesPerRow = max(2, width / (120 * sampleStep))
+        let minimumGapHeight = max(sampleStep * 2, 4)
+        var sawTopChrome = false
+        var transparentGapHeight = 0
+        var deviceSearchTop = 0
+
+        for y in stride(from: 0, to: topSearchLimit, by: sampleStep) {
+            let visibleSamples = alphaSampleCount(
+                in: pixels,
+                width: width,
+                bytesPerRow: bytesPerRow,
+                bytesPerPixel: bytesPerPixel,
+                y: y,
+                sampleStep: sampleStep,
+                threshold: visibleAlphaThreshold
+            )
+
+            if visibleSamples >= minimumVisibleSamplesPerRow {
+                sawTopChrome = true
+                transparentGapHeight = 0
+            } else if sawTopChrome, visibleSamples <= maximumGapSamplesPerRow {
+                transparentGapHeight += sampleStep
+                if transparentGapHeight >= minimumGapHeight {
+                    deviceSearchTop = min(y + sampleStep, height - 1)
+                    break
+                }
+            } else {
+                transparentGapHeight = 0
+            }
+        }
+
+        guard sawTopChrome, deviceSearchTop > 0 else {
+            return nil
+        }
+
+        var minX = width
+        var minY = height
+        var maxX = 0
+        var maxY = 0
+
+        for y in stride(from: deviceSearchTop, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
+                let offset = y * bytesPerRow + x * bytesPerPixel + 3
+                guard pixels[offset] > visibleAlphaThreshold else { continue }
+
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+
+        guard minX < maxX, minY < maxY else {
+            return nil
+        }
+
+        let padding = sampleStep
+        let originX = max(minX - padding, 0)
+        let originY = max(minY - padding, 0)
+        let rect = CGRect(
+            x: originX,
+            y: originY,
+            width: min(maxX - minX + padding * 2, width - originX),
+            height: min(maxY - minY + padding * 2, height - originY)
+        ).integral
+
+        guard rect.width > CGFloat(width) * 0.15,
+              rect.height > CGFloat(height) * 0.25,
+              !approximatelyEqual(rect, CGRect(x: 0, y: 0, width: width, height: height)) else {
+            return nil
+        }
+
+        return rect
+    }
+
+    private static func alphaSampleCount(
+        in pixels: [UInt8],
+        width: Int,
+        bytesPerRow: Int,
+        bytesPerPixel: Int,
+        y: Int,
+        sampleStep: Int,
+        threshold: UInt8
+    ) -> Int {
+        var count = 0
+
+        for x in stride(from: 0, to: width, by: sampleStep) {
+            let offset = y * bytesPerRow + x * bytesPerPixel + 3
+            if pixels[offset] > threshold {
+                count += 1
+            }
+        }
+
+        return count
     }
 
     private static func simulatorBezelCropRect(
