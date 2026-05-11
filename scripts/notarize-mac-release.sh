@@ -8,6 +8,7 @@ CONFIGURATION="${CONFIGURATION:-Release}"
 TEAM_ID="${APPLE_TEAM_ID:-VY76D5S364}"
 PRODUCT_NAME="${PRODUCT_NAME:-Apperture}"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.landmk1.apperture}"
+DEVELOPER_ID_IDENTITY="${DEVELOPER_ID_IDENTITY:-Developer ID Application}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/build/mac-release}"
 ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_ROOT/export"
@@ -83,7 +84,7 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 	<key>signingStyle</key>
 	<string>manual</string>
 	<key>signingCertificate</key>
-	<string>Developer ID Application</string>
+	<string>$DEVELOPER_ID_IDENTITY</string>
 	<key>teamID</key>
 	<string>$TEAM_ID</string>
 </dict>
@@ -99,7 +100,7 @@ xcodebuild archive \
   -archivePath "$ARCHIVE_PATH" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   CODE_SIGN_STYLE=Manual \
-  CODE_SIGN_IDENTITY="Developer ID Application" \
+  CODE_SIGN_IDENTITY="$DEVELOPER_ID_IDENTITY" \
   ENABLE_HARDENED_RUNTIME=YES \
   PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID"
 
@@ -138,6 +139,10 @@ hdiutil create \
   -ov \
   -format UDZO \
   "$DMG_PATH"
+
+echo "Signing disk image..."
+codesign --force --sign "$DEVELOPER_ID_IDENTITY" --timestamp "$DMG_PATH"
+codesign --verify --verbose=2 "$DMG_PATH"
 
 if [[ "${SKIP_NOTARIZATION:-0}" != "1" ]]; then
   submit_for_notarization "$DMG_PATH"
