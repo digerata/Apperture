@@ -429,6 +429,30 @@ struct PairingAuthRequest: Codable, Equatable {
     }
 }
 
+#if DEBUG
+enum DevelopmentPairing {
+    static let simulatorPairID = "debug-ios-simulator"
+    static let simulatorSharedSecret = "debug-ios-simulator-local-pairing-v1"
+
+    static func simulatorDevice(peerDeviceID: String) -> PairedDevice {
+        PairedDevice(
+            id: simulatorPairID,
+            peerDeviceID: peerDeviceID,
+            displayName: "iOS Simulator",
+            kind: .iPhone,
+            sharedSecret: simulatorSharedSecret,
+            pairedAt: Date(),
+            isRevoked: false
+        )
+    }
+
+    static func isValidSimulatorAuthRequest(_ request: PairingAuthRequest) -> Bool {
+        request.pairID == simulatorPairID &&
+            request.hasValidProof(sharedSecret: simulatorSharedSecret)
+    }
+}
+#endif
+
 struct RemoteClientEnvelope: Codable, Equatable {
     enum Kind: String, Codable {
         case pairingRequest
@@ -551,6 +575,12 @@ enum PairingCrypto {
 enum PrivateNetworkClassifier {
     static func networkKind(for endpoint: String?) -> SessionAuditRecord.NetworkKind {
         guard let endpoint else { return .unknown }
+        let lowercasedEndpoint = endpoint.lowercased()
+
+        if lowercasedEndpoint.contains("localhost") || lowercasedEndpoint.contains("::1") {
+            return .loopback
+        }
+
         let host = endpoint
             .split(separator: ":")
             .first

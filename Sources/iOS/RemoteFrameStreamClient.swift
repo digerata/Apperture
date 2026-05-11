@@ -444,7 +444,9 @@ final class RemoteFrameStreamClient: ObservableObject {
                 StreamEndpointCandidate(
                     id: "simulator-loopback",
                     name: "Mac localhost",
-                    endpoint: .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: port)
+                    endpoint: .hostPort(host: .ipv4(IPv4Address("127.0.0.1")!), port: port),
+                    detail: "Debug simulator pairing",
+                    pairedDevice: DevelopmentPairing.simulatorDevice(peerDeviceID: pairingManager.localIdentity.id)
                 )
             )
         }

@@ -111,6 +111,13 @@ final class MacPairingManager: ObservableObject {
                 device.peerDeviceID == request.peerDeviceID &&
                 request.hasValidProof(sharedSecret: device.sharedSecret)
         }) else {
+            #if DEBUG
+            if PrivateNetworkClassifier.isAllowedPrivateEndpoint(remoteEndpoint),
+               DevelopmentPairing.isValidSimulatorAuthRequest(request) {
+                return DevelopmentPairing.simulatorDevice(peerDeviceID: request.peerDeviceID)
+            }
+            #endif
+
             return nil
         }
 
