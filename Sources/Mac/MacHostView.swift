@@ -40,6 +40,7 @@ struct MacHostView: View {
 
                 PermissionSummaryView()
                 FrameServerSummaryView()
+                PairingSummaryView(pairingManager: hostModel.pairingManager)
                 DeveloperActivitySummaryView()
                 if hostModel.windowShapeProbeState.isVisible {
                     WindowShapeProbeSummaryView()
@@ -338,6 +339,15 @@ private struct FrameServerSummaryView: View {
                     }
                 }
             }
+
+            Divider()
+
+            Button {
+                hostModel.beginPhonePairing()
+            } label: {
+                Label("Pair Phone", systemImage: "qrcode")
+            }
+            .buttonStyle(.borderless)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -373,6 +383,132 @@ private struct FrameServerSummaryView: View {
         case .offline, .failed:
             return false
         }
+    }
+}
+
+private struct PairingSummaryView: View {
+    @EnvironmentObject private var hostModel: HostModel
+    @ObservedObject var pairingManager: MacPairingManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "lock.shield")
+                    .foregroundColor(pairingManager.pairedDevices.isEmpty ? .secondary : .green)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Paired Devices")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(summaryText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+
+            if let pairingStatusMessage = pairingManager.pairingStatusMessage {
+                Label(pairingStatusMessage, systemImage: "info.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+
+            if let image = pairingManager.qrImage(), let offer = pairingManager.activeOffer {
+                Divider()
+
+                VStack(spacing: 12) {
+                    Image(nsImage: image)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 180, height: 180)
+                        .padding(8)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(.rect(cornerRadius: 8))
+
+                    Text("Scan from iPhone. Expires \(offer.expiresAt, style: .timer).")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+
+                    if let pendingRequest = pairingManager.pendingRequest {
+                        VStack(spacing: 8) {
+                            Label(
+                                "\(pendingRequest.request.phoneIdentity.displayName) wants to pair.",
+                                systemImage: pendingRequest.request.phoneIdentity.symbolName
+                            )
+                            .font(.system(size: 12, weight: .medium))
+
+                            HStack(spacing: 8) {
+                                Button("Reject") {
+                                    hostModel.rejectPendingPairing()
+                                }
+                                Button("Allow") {
+                                    hostModel.approvePendingPairing()
+                                }
+                                .keyboardShortcut(.defaultAction)
+                            }
+                        }
+                    }
+
+                    Button("Cancel Pairing") {
+                        hostModel.cancelPhonePairing()
+                    }
+                    .buttonStyle(.link)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            if !pairingManager.pairedDevices.isEmpty {
+                Divider()
+
+                ForEach(pairingManager.pairedDevices.filter { !$0.isRevoked }) { device in
+                    HStack(spacing: 8) {
+                        Image(systemName: device.symbolName)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 16)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(device.displayName)
+                                .font(.system(size: 12, weight: .medium))
+                            Text(device.lastSeenAt.map { "Last seen \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Not connected yet")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            hostModel.revokePairing(device)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Revoke \(device.displayName)")
+                    }
+                }
+            }
+
+            if !pairingManager.auditRecords.isEmpty {
+                Divider()
+                Text("\(pairingManager.auditRecords.count) session\(pairingManager.auditRecords.count == 1 ? "" : "s") in the last 30 days.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var summaryText: String {
+        let activeCount = pairingManager.pairedDevices.filter { !$0.isRevoked }.count
+        if activeCount == 0 {
+            return "No phones paired yet."
+        }
+        return "\(activeCount) trusted phone\(activeCount == 1 ? "" : "s")."
     }
 }
 

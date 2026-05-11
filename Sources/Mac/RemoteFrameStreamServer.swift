@@ -11,6 +11,8 @@ final class RemoteFrameStreamServer {
     private let frameAdmissionLock = NSLock()
     private var listener: NWListener?
     private var connections: [UUID: NWConnection] = [:]
+    private var authenticatedDevices: [UUID: PairedDevice] = [:]
+    private var pendingPairingConnections: Set<UUID> = []
     private var readyConnectionIDs: Set<UUID> = []
     private var frameSendInFlightIDs: Set<UUID> = []
     private var pendingFramePackets: [UUID: PendingFramePacket] = [:]
@@ -29,6 +31,10 @@ final class RemoteFrameStreamServer {
     private var lastBackpressureKeyFrameRequestTime: CFAbsoluteTime = 0
     private var statusHandler: ((FrameServerStatus) -> Void)?
     private var controlHandler: ((RemoteControlMessage) -> Void)?
+    private var pairingRequestHandler: ((UUID, PairingRequest, String?) -> Void)?
+    private var authRequestHandler: ((PairingAuthRequest, String?) -> PairedDevice?)?
+    private var connectionAuthenticatedHandler: ((UUID, PairedDevice, String?) -> Void)?
+    private var connectionClosedHandler: ((UUID, PairedDevice?, String?) -> Void)?
     private var diagnosticsWindowStartTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
     private var lastDiagnosticsTime: CFAbsoluteTime = 0
     private var capturedFrameCount = 0
@@ -57,11 +63,19 @@ final class RemoteFrameStreamServer {
 
     func start(
         statusHandler: @escaping (FrameServerStatus) -> Void,
-        controlHandler: @escaping (RemoteControlMessage) -> Void
+        controlHandler: @escaping (RemoteControlMessage) -> Void,
+        pairingRequestHandler: @escaping (UUID, PairingRequest, String?) -> Void,
+        authRequestHandler: @escaping (PairingAuthRequest, String?) -> PairedDevice?,
+        connectionAuthenticatedHandler: @escaping (UUID, PairedDevice, String?) -> Void,
+        connectionClosedHandler: @escaping (UUID, PairedDevice?, String?) -> Void
     ) {
         queue.async {
             self.statusHandler = statusHandler
             self.controlHandler = controlHandler
+            self.pairingRequestHandler = pairingRequestHandler
+            self.authRequestHandler = authRequestHandler
+            self.connectionAuthenticatedHandler = connectionAuthenticatedHandler
+            self.connectionClosedHandler = connectionClosedHandler
             guard self.listener == nil else {
                 self.publishStatus()
                 return
@@ -110,6 +124,8 @@ final class RemoteFrameStreamServer {
             self.listener = nil
             self.connections.values.forEach { $0.cancel() }
             self.connections.removeAll()
+            self.authenticatedDevices.removeAll()
+            self.pendingPairingConnections.removeAll()
             self.readyConnectionIDs.removeAll()
             self.frameSendInFlightIDs.removeAll()
             self.pendingFramePackets.removeAll()
@@ -345,8 +361,19 @@ final class RemoteFrameStreamServer {
             self.retryWorkItem = nil
             guard self.listener == nil,
                   let statusHandler,
-                  let controlHandler else { return }
-            self.start(statusHandler: statusHandler, controlHandler: controlHandler)
+                  let controlHandler,
+                  let pairingRequestHandler,
+                  let authRequestHandler,
+                  let connectionAuthenticatedHandler,
+                  let connectionClosedHandler else { return }
+            self.start(
+                statusHandler: statusHandler,
+                controlHandler: controlHandler,
+                pairingRequestHandler: pairingRequestHandler,
+                authRequestHandler: authRequestHandler,
+                connectionAuthenticatedHandler: connectionAuthenticatedHandler,
+                connectionClosedHandler: connectionClosedHandler
+            )
         }
 
         retryWorkItem = workItem
@@ -356,33 +383,8 @@ final class RemoteFrameStreamServer {
     private func handleConnectionState(_ state: NWConnection.State, id: UUID) {
         switch state {
         case .ready:
-            readyConnectionIDs.insert(id)
             publishStatus()
             receiveControlLength(from: id)
-            if let hostInfoPacket = Self.makePacket(type: .hostInfo, message: Self.hostInfoMessage) {
-                send(hostInfoPacket, to: id)
-            }
-            if let wallpaperPacket {
-                send(wallpaperPacket, to: id)
-            }
-            if let windowListPacket {
-                send(windowListPacket, to: id)
-            }
-            for packet in appIconPackets.values {
-                send(packet, to: id)
-            }
-            if let videoFormatPacket {
-                send(videoFormatPacket, to: id)
-            }
-            if let videoMaskPacket {
-                send(videoMaskPacket, to: id)
-            }
-            if let lastPacket, lastPacket.isKeyFrame {
-                sendFrame(lastPacket, to: id)
-            } else {
-                connectionsNeedingKeyFrame.insert(id)
-            }
-            videoEncoder.requestKeyFrame()
         case .waiting(let error):
             closeConnection(id: id, reason: error.localizedDescription)
         case .failed(let error):
@@ -392,6 +394,52 @@ final class RemoteFrameStreamServer {
         default:
             break
         }
+    }
+
+    func completePairing(connectionID: UUID, response: PairingResponse) {
+        queue.async {
+            guard let connection = self.connections[connectionID] else { return }
+            guard let packet = Self.makePacket(type: .pairingResponse, message: response) else {
+                self.closeConnection(id: connectionID, reason: "Pairing response could not be encoded.")
+                return
+            }
+
+            connection.send(content: packet, completion: .contentProcessed { [weak self] _ in
+                self?.queue.async {
+                    self?.closeConnection(id: connectionID, reason: "Pairing completed.")
+                }
+            })
+        }
+    }
+
+    private func authorizeConnection(id: UUID, device: PairedDevice) {
+        authenticatedDevices[id] = device
+        readyConnectionIDs.insert(id)
+        publishStatus()
+        connectionAuthenticatedHandler?(id, device, remoteEndpointDescription(for: id))
+
+        if let authStatusPacket = Self.makePacket(type: .authStatus, message: PairingAuthStatus.accepted) {
+            send(authStatusPacket, to: id)
+        }
+        if let hostInfoPacket = Self.makePacket(type: .hostInfo, message: Self.hostInfoMessage) {
+            send(hostInfoPacket, to: id)
+        }
+        if let wallpaperPacket {
+            send(wallpaperPacket, to: id)
+        }
+        // HostModel republishes a fresh window list after authentication; avoid showing stale app metadata.
+        if let videoFormatPacket {
+            send(videoFormatPacket, to: id)
+        }
+        if let videoMaskPacket {
+            send(videoMaskPacket, to: id)
+        }
+        if let lastPacket, lastPacket.isKeyFrame {
+            sendFrame(lastPacket, to: id)
+        } else {
+            connectionsNeedingKeyFrame.insert(id)
+        }
+        videoEncoder.requestKeyFrame()
     }
 
     private func send(_ packet: Data, to id: UUID, isFrame: Bool = false) {
@@ -512,8 +560,12 @@ final class RemoteFrameStreamServer {
     }
 
     private func closeConnection(id: UUID, reason: String? = nil) {
+        let device = authenticatedDevices[id]
+        connectionClosedHandler?(id, device, reason)
         connections[id]?.cancel()
         connections.removeValue(forKey: id)
+        authenticatedDevices.removeValue(forKey: id)
+        pendingPairingConnections.remove(id)
         readyConnectionIDs.remove(id)
         frameSendInFlightIDs.remove(id)
         pendingFramePackets.removeValue(forKey: id)
@@ -561,22 +613,91 @@ final class RemoteFrameStreamServer {
                 return
             }
 
-            if let data, data.count == length,
-               let message = try? JSONDecoder().decode(RemoteControlMessage.self, from: data) {
-                if message.kind == .requestKeyFrame {
-                    self.connectionsNeedingKeyFrame.insert(id)
-                    self.requestBackpressureKeyFrameIfNeeded()
-                } else {
-                    self.controlHandler?(message)
-                }
+            if let data, data.count == length {
+                self.handleClientPayload(data, from: id)
             }
 
             self.receiveControlLength(from: id)
         }
     }
 
+    private func handleClientPayload(_ data: Data, from id: UUID) {
+        if let envelope = try? JSONDecoder.apperture.decode(RemoteClientEnvelope.self, from: data) {
+            handleClientEnvelope(envelope, from: id)
+            return
+        }
+
+        if let message = try? JSONDecoder().decode(RemoteControlMessage.self, from: data) {
+            guard authenticatedDevices[id] != nil else {
+                closeConnection(id: id, reason: "Unauthenticated control message.")
+                return
+            }
+            handleControlMessage(message, from: id)
+            return
+        }
+
+        closeConnection(id: id, reason: "Invalid client message.")
+    }
+
+    private func handleClientEnvelope(_ envelope: RemoteClientEnvelope, from id: UUID) {
+        switch envelope.kind {
+        case .pairingRequest:
+            guard let request = envelope.pairingRequest else {
+                closeConnection(id: id, reason: "Invalid pairing request.")
+                return
+            }
+            pendingPairingConnections.insert(id)
+            pairingRequestHandler?(id, request, remoteEndpointDescription(for: id))
+        case .authRequest:
+            guard let request = envelope.authRequest,
+                  PrivateNetworkClassifier.isAllowedPrivateEndpoint(remoteEndpointDescription(for: id)),
+                  let device = authRequestHandler?(request, remoteEndpointDescription(for: id)) else {
+                if let packet = Self.makePacket(type: .authStatus, message: PairingAuthStatus.rejected("This device is not paired with this Mac or is not on a private network.")) {
+                    send(packet, to: id)
+                }
+                closeConnection(id: id, reason: "Authentication failed.")
+                return
+            }
+            authorizeConnection(id: id, device: device)
+        case .control:
+            guard authenticatedDevices[id] != nil else {
+                closeConnection(id: id, reason: "Unauthenticated control message.")
+                return
+            }
+            guard let message = envelope.control else { return }
+            handleControlMessage(message, from: id)
+        }
+    }
+
+    private func handleControlMessage(_ message: RemoteControlMessage, from id: UUID) {
+        if message.kind == .requestKeyFrame {
+            connectionsNeedingKeyFrame.insert(id)
+            requestBackpressureKeyFrameIfNeeded()
+        } else {
+            controlHandler?(message)
+        }
+    }
+
     private func publishStatus() {
         statusHandler?(.online(port: RemoteFrameStreamConfiguration.tcpPort, clientCount: readyConnectionIDs.count))
+    }
+
+    private func remoteEndpointDescription(for id: UUID) -> String? {
+        guard let endpoint = connections[id]?.endpoint else { return nil }
+        switch endpoint {
+        case .hostPort(let host, let port):
+            return "\(host):\(port.rawValue)"
+        case .service(let name, let type, let domain, _):
+            return "\(name).\(type)\(domain)"
+        case .url(let url):
+            return url.absoluteString
+        case .unix(let path):
+            return path
+        case .opaque:
+            return nil
+        @unknown default:
+            return nil
+        }
     }
 
     private func recordCaptureTiming(_ timing: LiveCaptureFrameTiming, size: CGSize) {
@@ -769,7 +890,7 @@ final class RemoteFrameStreamServer {
             encodedData = image.hasAlpha ? makePNGData(from: image) : makeJPEGData(from: image)
         case .wallpaper:
             encodedData = makeJPEGData(from: image)
-        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon:
+        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon, .pairingResponse, .authStatus:
             return nil
         }
 
@@ -799,7 +920,15 @@ final class RemoteFrameStreamServer {
     }
 
     private static func makePacket<T: Encodable>(type: RemoteFrameStreamConfiguration.PacketType, message: T) -> Data? {
-        guard let encodedData = try? JSONEncoder().encode(message) else {
+        let encodedData: Data?
+        switch type {
+        case .pairingResponse, .authStatus:
+            encodedData = try? JSONEncoder.apperture.encode(message)
+        case .frame, .wallpaper, .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon:
+            encodedData = try? JSONEncoder().encode(message)
+        }
+
+        guard let encodedData else {
             return nil
         }
 

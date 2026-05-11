@@ -16,6 +16,7 @@ final class HostModel: ObservableObject {
     )
     @Published private(set) var lastRefreshDate: Date?
     @Published private(set) var windowShapeProbeState: WindowShapeProbeState = .idle
+    @Published private(set) var pairingManager = MacPairingManager()
 
     private let discoveryService = WindowDiscoveryService()
     private let agentEventBridge = AgentEventBridgeService()
@@ -26,7 +27,10 @@ final class HostModel: ObservableObject {
     private let windowShapeProbeService = WindowShapeProbeService()
     private let networkAddressService = HostNetworkAddressService()
     private let liveFramePreviewScheduler = LiveFramePreviewScheduler()
+    private let remoteWindowListRefreshCoalescingInterval: TimeInterval = 1
     private var latestCaptureScreenFrame: CGRect?
+    private var activeAuditSessionIDs: [UUID: String] = [:]
+    private var pendingPairingConnectionID: UUID?
 
     init() {
         frameServer.start(
@@ -39,6 +43,33 @@ final class HostModel: ObservableObject {
             controlHandler: { [weak self] message in
                 Task { @MainActor in
                     self?.handleRemoteControl(message)
+                }
+            },
+            pairingRequestHandler: { [weak self] connectionID, request, endpoint in
+                Task { @MainActor in
+                    _ = self?.pairingManager.submit(request, remoteEndpoint: endpoint)
+                    self?.pendingPairingConnectionID = connectionID
+                }
+            },
+            authRequestHandler: { [weak self] request, endpoint in
+                guard let self else { return nil }
+                return DispatchQueue.main.sync {
+                    self.pairingManager.authenticate(request, remoteEndpoint: endpoint)
+                }
+            },
+            connectionAuthenticatedHandler: { [weak self] connectionID, device, endpoint in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.refreshWindows()
+                    let auditRecord = self.pairingManager.beginAuditSession(device: device, remoteEndpoint: endpoint)
+                    self.activeAuditSessionIDs[connectionID] = auditRecord.id
+                }
+            },
+            connectionClosedHandler: { [weak self] connectionID, _, reason in
+                Task { @MainActor in
+                    guard let self,
+                          let sessionID = self.activeAuditSessionIDs.removeValue(forKey: connectionID) else { return }
+                    self.pairingManager.endAuditSession(sessionID, reason: reason)
                 }
             }
         )
@@ -222,6 +253,41 @@ final class HostModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([outputDirectoryURL])
     }
 
+    func beginPhonePairing() {
+        let endpointHints = connectionHints
+            .sorted { lhs, rhs in
+                pairingHintPriority(lhs.kind) < pairingHintPriority(rhs.kind)
+            }
+            .map(\.endpointText)
+        pairingManager.beginPairing(
+            endpointHints: endpointHints,
+            port: RemoteFrameStreamConfiguration.tcpPort
+        )
+    }
+
+    func cancelPhonePairing() {
+        pendingPairingConnectionID = nil
+        pairingManager.cancelPairing()
+    }
+
+    func approvePendingPairing() {
+        guard let response = pairingManager.approvePendingRequest(),
+              let connectionID = pendingPairingConnectionID else { return }
+        pendingPairingConnectionID = nil
+        frameServer.completePairing(connectionID: connectionID, response: response)
+    }
+
+    func rejectPendingPairing() {
+        guard let response = pairingManager.rejectPendingRequest(),
+              let connectionID = pendingPairingConnectionID else { return }
+        pendingPairingConnectionID = nil
+        frameServer.completePairing(connectionID: connectionID, response: response)
+    }
+
+    func revokePairing(_ device: PairedDevice) {
+        pairingManager.revoke(device)
+    }
+
     private func openSystemSettings(anchor: String) {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else {
             return
@@ -238,11 +304,21 @@ final class HostModel: ObservableObject {
         }
     }
 
+    private func pairingHintPriority(_ kind: HostConnectionHint.Kind) -> Int {
+        switch kind {
+        case .hostname:
+            return 0
+        case .tailscale:
+            return 1
+        case .localNetwork:
+            return 2
+        }
+    }
+
     private func handleRemoteControl(_ message: RemoteControlMessage) {
         switch message.kind {
         case .requestWindowList:
-            refreshWindows()
-            publishWindowList()
+            refreshWindowsForRemoteRequest()
         case .selectWindow:
             guard let windowID = message.windowID else { return }
             selectRemoteWindow(windowID)
@@ -254,6 +330,16 @@ final class HostModel: ObservableObject {
             guard let window = selectedWindow else { return }
             inputInjectionService.perform(message, in: window, targetFrame: latestCaptureScreenFrame)
         }
+    }
+
+    private func refreshWindowsForRemoteRequest() {
+        if let lastRefreshDate,
+           Date().timeIntervalSince(lastRefreshDate) < remoteWindowListRefreshCoalescingInterval {
+            publishWindowList(includeApplicationIcons: false)
+            return
+        }
+
+        refreshWindows()
     }
 
     private func handleDeveloperActivity(_ event: DeveloperActivityEvent) {
@@ -292,6 +378,17 @@ final class HostModel: ObservableObject {
 
         selectedWindowID = windowID
         publishWindowList()
+        if let sessionID = activeAuditSessionIDs.values.first,
+           let window = selectedWindow {
+            pairingManager.recordWindowSelection(
+                SessionWindowSelection(
+                    appName: window.applicationName,
+                    windowTitle: window.displayTitle,
+                    selectedAt: Date()
+                ),
+                in: sessionID
+            )
+        }
 
         startLiveView()
     }
@@ -314,7 +411,7 @@ final class HostModel: ObservableObject {
         startLiveView()
     }
 
-    private func publishWindowList() {
+    private func publishWindowList(includeApplicationIcons: Bool = true) {
         let streamableWindows = windows.filter { window in
             window.ownerName != "Apperture"
         }
@@ -332,7 +429,9 @@ final class HostModel: ObservableObject {
         }
 
         frameServer.publishWindowList(summaries)
-        publishApplicationIcons(for: streamableWindows)
+        if includeApplicationIcons {
+            publishApplicationIcons(for: streamableWindows)
+        }
     }
 
     private func publishApplicationIcons(for windows: [MirrorWindow]) {

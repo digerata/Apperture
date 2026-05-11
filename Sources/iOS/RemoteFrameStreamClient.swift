@@ -17,6 +17,8 @@ final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var diagnostics = RemoteConnectionDiagnostics()
     @Published private(set) var streamDiagnostics: RemoteStreamDiagnosticsMessage?
     @Published private(set) var developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+    @Published private(set) var pairingManager = IOSPairingManager()
+    @Published private(set) var pairingStatusMessage: String?
     let videoSampleBuffers = PassthroughSubject<CMSampleBuffer, Never>()
     var currentHostID: String? { activeCandidateID }
 
@@ -30,8 +32,13 @@ final class RemoteFrameStreamClient: ObservableObject {
     private var timeoutWorkItem: DispatchWorkItem?
     private var connectedHostName: String?
     private var activeCandidateID: String?
+    private var manuallySelectedHostID: String?
+    private var allowsAutomaticConnection = false
     private var savedManualEndpoints: [ManualStreamEndpoint] = []
     private var appIconCache: [String: Data] = [:]
+    private var hostReachability: [String: HostReachabilityStatus] = [:]
+    private var reachableEndpointOptions: [String: CandidateEndpointOption] = [:]
+    private var reachabilityProbes: [String: ReachabilityProbe] = [:]
     private var consecutiveConnectionFailures = 0
     private let videoDecoder = RemoteVideoDecoder()
     private var nextSequenceNumber: UInt64 = 0
@@ -39,6 +46,11 @@ final class RemoteFrameStreamClient: ObservableObject {
     private var requiresVideoKeyFrame = false
     private var isAwaitingStreamResetAfterSelection = false
     private var streamDecodeGeneration: UInt64 = 0
+
+    private var activeCandidate: StreamEndpointCandidate? {
+        guard let activeCandidateID else { return nil }
+        return candidates.first { $0.id == activeCandidateID }
+    }
 
     init() {
         savedManualEndpoints = Self.loadSavedManualEndpoints()
@@ -51,8 +63,9 @@ final class RemoteFrameStreamClient: ObservableObject {
         }
     }
 
-    func start() {
+    func start(automaticallyConnect: Bool = false) {
         guard browser == nil else { return }
+        allowsAutomaticConnection = automaticallyConnect
         state = .searching
         recordDiagnosticEvent("Starting Bonjour browser for \(RemoteFrameStreamConfiguration.bonjourType).")
         rebuildCandidates(from: [])
@@ -71,7 +84,9 @@ final class RemoteFrameStreamClient: ObservableObject {
 
         self.browser = browser
         browser.start(queue: queue)
-        connectToNextCandidate()
+        if allowsAutomaticConnection {
+            connectToNextCandidate()
+        }
     }
 
     func stop() {
@@ -79,16 +94,25 @@ final class RemoteFrameStreamClient: ObservableObject {
         retryWorkItem = nil
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
+        reachabilityProbes.values.forEach { probe in
+            probe.timeout.cancel()
+            probe.connection.cancel()
+        }
+        reachabilityProbes = [:]
         browser?.cancel()
         browser = nil
         browseResults = []
         connection?.cancel()
         connection = nil
         candidates = []
+        hostReachability = [:]
+        reachableEndpointOptions = [:]
         nextCandidateIndex = 0
         consecutiveConnectionFailures = 0
         connectedHostName = nil
         activeCandidateID = nil
+        manuallySelectedHostID = nil
+        allowsAutomaticConnection = false
         latestFrame = nil
         videoFrameSize = nil
         latestFrameMask = nil
@@ -96,6 +120,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         windows = []
         streamDiagnostics = nil
         developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+        pairingStatusMessage = nil
         nextSequenceNumber = 0
         lastKeyFrameRequestTime = 0
         requiresVideoKeyFrame = false
@@ -113,14 +138,14 @@ final class RemoteFrameStreamClient: ObservableObject {
         recordDiagnosticEvent("Stopped stream client.")
     }
 
-    func restart() {
+    func restart(automaticallyConnect: Bool = false) {
         stop()
-        start()
+        start(automaticallyConnect: automaticallyConnect)
     }
 
     func send(_ message: RemoteControlMessage) {
         guard let connection else { return }
-        guard let payload = try? JSONEncoder().encode(message) else { return }
+        guard let payload = try? JSONEncoder.apperture.encode(RemoteClientEnvelope.control(message)) else { return }
         guard payload.count <= RemoteFrameStreamConfiguration.maxControlMessageBytes else { return }
 
         var length = UInt32(payload.count).bigEndian
@@ -137,6 +162,62 @@ final class RemoteFrameStreamClient: ObservableObject {
                 }
             })
         }
+    }
+
+    private func sendEnvelope(_ envelope: RemoteClientEnvelope) {
+        guard let connection else { return }
+        guard let payload = try? JSONEncoder.apperture.encode(envelope) else { return }
+        guard payload.count <= RemoteFrameStreamConfiguration.maxControlMessageBytes else { return }
+
+        var length = UInt32(payload.count).bigEndian
+        var packet = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        packet.append(payload)
+
+        queue.async { [weak self, weak connection] in
+            guard let connection else { return }
+            connection.send(content: packet, completion: .contentProcessed { error in
+                guard let error else { return }
+                Task { @MainActor [weak self, weak connection] in
+                    guard let self, let connection, self.connection === connection else { return }
+                    self.handleConnectionFailure(error.localizedDescription)
+                }
+            })
+        }
+    }
+
+    @discardableResult
+    func connectForPairing(request: PairingRequest, offer: PairingOffer) -> String? {
+        guard let endpointText = offer.endpointHints.first,
+              let endpoint = ManualStreamEndpoint(input: endpointText) else {
+            return "The QR code did not include a reachable Mac address."
+        }
+
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        pairingStatusMessage = nil
+        connection?.cancel()
+        connection = nil
+        connectedHostName = offer.macDisplayName
+        activeCandidateID = "pairing-\(offer.id)"
+        consecutiveConnectionFailures = 0
+        latestFrame = nil
+        videoFrameSize = nil
+        latestFrameMask = nil
+        wallpaper = nil
+        windows = []
+        state = .connecting(offer.macDisplayName)
+        pairingStatusMessage = "Sending pairing request to \(offer.macDisplayName)..."
+        recordDiagnosticEvent("Starting pairing connection to \(offer.macDisplayName) at \(endpoint.displayName).")
+
+        let connection = NWConnection(to: endpoint.endpoint, using: Self.connectionParameters())
+        self.connection = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            self?.handlePairingConnectionState(state, for: connection, request: request)
+        }
+        connection.start(queue: queue)
+        return nil
     }
 
     func requestKeyFrameIfNeeded() {
@@ -182,6 +263,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection = nil
         connectedHostName = nil
         activeCandidateID = nil
+        manuallySelectedHostID = nil
         consecutiveConnectionFailures = 0
         streamDecodeGeneration += 1
         nextCandidateIndex = 0
@@ -192,7 +274,7 @@ final class RemoteFrameStreamClient: ObservableObject {
 
         if browser == nil {
             start()
-        } else {
+        } else if allowsAutomaticConnection {
             connectToNextCandidate()
         }
 
@@ -214,16 +296,68 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection = nil
         connectedHostName = nil
         activeCandidateID = nil
+        manuallySelectedHostID = nil
         consecutiveConnectionFailures = 0
         streamDecodeGeneration += 1
         nextCandidateIndex = 0
         rebuildCandidates(from: browseResults)
-        connectToNextCandidate()
+        if allowsAutomaticConnection {
+            connectToNextCandidate()
+        }
+    }
+
+    func forgetHost(withID hostID: RemoteHostSummary.ID) {
+        guard let candidate = candidates.first(where: { $0.id == hostID }) else {
+            recordDiagnosticEvent("Forget host ignored; candidate is unavailable.")
+            return
+        }
+
+        if let pairedDevice = candidate.pairedDevice {
+            pairingManager.forget(pairedDevice)
+            recordDiagnosticEvent("Forgot paired host \(candidate.name).")
+        } else if let endpoint = savedManualEndpoints.first(where: { $0.id == candidate.id }) {
+            savedManualEndpoints.removeAll { $0.id == endpoint.id }
+            Self.storeSavedManualEndpoints(savedManualEndpoints)
+            manualEndpointDescription = savedManualEndpoints.first?.displayName
+            updateDiagnostics { diagnostics in
+                diagnostics.manualEndpoint = manualEndpointDescription
+            }
+            recordDiagnosticEvent("Forgot saved host \(endpoint.displayName).")
+        } else {
+            recordDiagnosticEvent("Forget host ignored; \(candidate.name) is not saved.")
+            return
+        }
+
+        if activeCandidateID == candidate.id {
+            connection?.cancel()
+            connection = nil
+            connectedHostName = nil
+            activeCandidateID = nil
+            state = .idle
+        }
+
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        hostReachability.removeValue(forKey: candidate.id)
+        reachableEndpointOptions.removeValue(forKey: candidate.id)
+        cancelReachabilityProbes(for: candidate.id)
+        manuallySelectedHostID = nil
+        nextCandidateIndex = 0
+        rebuildCandidates(from: browseResults)
     }
 
     func connect(toHostID hostID: RemoteHostSummary.ID) {
-        guard let index = candidates.firstIndex(where: { $0.id == hostID }) else {
+        guard let candidate = candidates.first(where: { $0.id == hostID }) else {
             recordDiagnosticEvent("Host selection ignored; candidate is unavailable.")
+            return
+        }
+
+        guard candidate.pairedDevice != nil else {
+            pairingStatusMessage = "Pair this Mac before connecting. Scan the QR code shown on the Mac."
+            state = .failed("Pair this Mac before connecting. Scan the QR code shown on the Mac.")
+            recordDiagnosticEvent("Host selection ignored; \(candidate.name) is not paired.")
             return
         }
 
@@ -231,21 +365,13 @@ final class RemoteFrameStreamClient: ObservableObject {
         retryWorkItem = nil
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
+        pairingStatusMessage = nil
         connection?.cancel()
         connection = nil
         connectedHostName = nil
         activeCandidateID = nil
-        latestFrame = nil
-        videoFrameSize = nil
-        latestFrameMask = nil
-        wallpaper = nil
-        windows = []
-        streamDiagnostics = nil
-        isAwaitingStreamResetAfterSelection = false
-        streamDecodeGeneration += 1
-        videoDecoder.reset()
-        nextCandidateIndex = index
-        connectToNextCandidate()
+        manuallySelectedHostID = candidate.id
+        connect(to: candidate)
     }
 
     var diagnosticsReport: String {
@@ -302,7 +428,7 @@ final class RemoteFrameStreamClient: ObservableObject {
                     .sorted()
             }
             self.recordDiagnosticEvent("Bonjour results changed: \(results.count) service\(results.count == 1 ? "" : "s").")
-            if self.retryWorkItem == nil {
+            if self.allowsAutomaticConnection, self.retryWorkItem == nil {
                 self.connectToNextCandidate()
             }
         }
@@ -310,6 +436,7 @@ final class RemoteFrameStreamClient: ObservableObject {
 
     private func rebuildCandidates(from results: Set<NWBrowser.Result>) {
         var updatedCandidates: [StreamEndpointCandidate] = []
+        let discoveredCandidates = results.map { StreamEndpointCandidate(endpoint: $0.endpoint) }
 
         #if targetEnvironment(simulator)
         if let port = NWEndpoint.Port(rawValue: RemoteFrameStreamConfiguration.tcpPort) {
@@ -322,6 +449,40 @@ final class RemoteFrameStreamClient: ObservableObject {
             )
         }
         #endif
+
+        pairingManager.loadPairings()
+        let activePairedDevices = pairingManager.pairedMacs.filter { !$0.isRevoked }
+        var discoveredCandidateIDsUsedForPairings = Set<String>()
+
+        updatedCandidates.append(
+            contentsOf: activePairedDevices
+                .compactMap { device in
+                    let matchingDiscoveredCandidates = discoveredCandidates.filter { candidate in
+                        Self.hostNamesMatch(candidate.name, device.displayName)
+                    }
+                    matchingDiscoveredCandidates.forEach { discoveredCandidate in
+                        discoveredCandidateIDsUsedForPairings.insert(discoveredCandidate.id)
+                    }
+
+                    let endpointOptions = Self.endpointOptions(
+                        for: device,
+                        discoveredCandidates: matchingDiscoveredCandidates
+                    )
+                    guard let firstEndpointOption = endpointOptions.first else {
+                        return nil
+                    }
+
+                    return StreamEndpointCandidate(
+                        id: "paired-\(device.id)",
+                        name: device.displayName,
+                        endpoint: firstEndpointOption.endpoint,
+                        detail: firstEndpointOption.detail,
+                        isSaved: true,
+                        pairedDevice: device,
+                        endpointOptions: endpointOptions
+                    )
+                }
+        )
 
         updatedCandidates.append(
             contentsOf: savedManualEndpoints.map { endpoint in
@@ -336,8 +497,11 @@ final class RemoteFrameStreamClient: ObservableObject {
         )
 
         updatedCandidates.append(
-            contentsOf: results.map { result in
-                StreamEndpointCandidate(endpoint: result.endpoint)
+            contentsOf: discoveredCandidates.filter { candidate in
+                !discoveredCandidateIDsUsedForPairings.contains(candidate.id) &&
+                    !activePairedDevices.contains(where: { device in
+                        Self.hostNamesMatch(candidate.name, device.displayName)
+                    })
             }
         )
 
@@ -355,7 +519,9 @@ final class RemoteFrameStreamClient: ObservableObject {
 
         guard updatedCandidates != candidates else { return }
         candidates = updatedCandidates
+        pruneReachabilityState()
         updateHostSummaries()
+        refreshHostReachability()
         updateDiagnostics { diagnostics in
             diagnostics.candidates = updatedCandidates.map(\.diagnosticDescription)
         }
@@ -410,34 +576,122 @@ final class RemoteFrameStreamClient: ObservableObject {
         UserDefaults.standard.set(data, forKey: appIconCacheDefaultsKey)
     }
 
+    private static func hostNamesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        normalizedHostName(lhs) == normalizedHostName(rhs)
+    }
+
+    private static func normalizedHostName(_ name: String) -> String {
+        name
+            .replacingOccurrences(of: "\\032", with: " ")
+            .replacingOccurrences(of: "Apperture ", with: "")
+            .replacingOccurrences(of: "’", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    private static func endpointOptions(
+        for device: PairedDevice,
+        discoveredCandidates: [StreamEndpointCandidate]
+    ) -> [CandidateEndpointOption] {
+        var options: [CandidateEndpointOption] = []
+
+        options.append(contentsOf: discoveredCandidates.map { candidate in
+            CandidateEndpointOption(
+                endpoint: candidate.endpoint,
+                detail: candidate.endpointDescription,
+                priority: 0
+            )
+        })
+
+        var endpointTexts = device.endpointHints
+        if let lastEndpoint = device.lastEndpoint, !endpointTexts.contains(lastEndpoint) {
+            endpointTexts.append(lastEndpoint)
+        }
+
+        options.append(
+            contentsOf: endpointTexts.compactMap { endpointText in
+                guard let endpoint = ManualStreamEndpoint(input: endpointText) else { return nil }
+                return CandidateEndpointOption(
+                    endpoint: endpoint.endpoint,
+                    detail: endpoint.addressDescription,
+                    priority: endpointPriority(forHost: endpoint.host)
+                )
+            }
+        )
+
+        var seenIDs = Set<String>()
+        return options
+            .sorted { lhs, rhs in
+                if lhs.priority != rhs.priority {
+                    return lhs.priority < rhs.priority
+                }
+                return lhs.detail.localizedCaseInsensitiveCompare(rhs.detail) == .orderedAscending
+            }
+            .filter { option in
+                guard !seenIDs.contains(option.id) else { return false }
+                seenIDs.insert(option.id)
+                return true
+            }
+    }
+
+    private static func endpointPriority(forHost host: String) -> Int {
+        if isTailscaleIPv4Address(host) {
+            return 1
+        }
+        if isPrivateIPv4Address(host) {
+            return 3
+        }
+        return 2
+    }
+
+    private static func isTailscaleIPv4Address(_ host: String) -> Bool {
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        return octets[0] == 100 && (64...127).contains(octets[1])
+    }
+
+    private static func isPrivateIPv4Address(_ host: String) -> Bool {
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        return octets[0] == 10 ||
+            (octets[0] == 172 && (16...31).contains(octets[1])) ||
+            (octets[0] == 192 && octets[1] == 168)
+    }
+
     private func connectToNextCandidate() {
         guard connection == nil else { return }
 
         retryWorkItem?.cancel()
         retryWorkItem = nil
 
-        guard !candidates.isEmpty else {
-            state = .searching
+        let autoConnectCandidates = candidates.filter { candidate in
+            candidate.pairedDevice != nil && hostReachability[candidate.id] == .reachable
+        }
+
+        guard !autoConnectCandidates.isEmpty else {
+            state = candidates.isEmpty ? .searching : .idle
             return
         }
 
-        let candidate = candidates[nextCandidateIndex % candidates.count]
-        nextCandidateIndex = (nextCandidateIndex + 1) % candidates.count
+        let candidate = autoConnectCandidates[nextCandidateIndex % autoConnectCandidates.count]
+        nextCandidateIndex = (nextCandidateIndex + 1) % autoConnectCandidates.count
         connect(to: candidate)
     }
 
     private func connect(to candidate: StreamEndpointCandidate) {
+        let endpointOption = selectedEndpointOption(for: candidate)
         connectedHostName = candidate.name
         activeCandidateID = candidate.id
+        clearRemoteContentForNewConnection()
         updateHostSummaries()
         state = .connecting(candidate.name)
         updateDiagnostics { diagnostics in
-            diagnostics.activeCandidate = candidate.diagnosticDescription
+            diagnostics.activeCandidate = "\(candidate.name) — \(endpointOption.detail)"
             diagnostics.lastError = nil
         }
-        recordDiagnosticEvent("Connecting to \(candidate.diagnosticDescription).")
+        recordDiagnosticEvent("Connecting to \(candidate.name) — \(endpointOption.detail).")
 
-        let connection = NWConnection(to: candidate.endpoint, using: Self.connectionParameters())
+        let connection = NWConnection(to: endpointOption.endpoint, using: Self.connectionParameters())
         self.connection = connection
 
         connection.stateUpdateHandler = { [weak self, weak connection] state in
@@ -446,6 +700,19 @@ final class RemoteFrameStreamClient: ObservableObject {
 
         connection.start(queue: queue)
         scheduleTimeout(for: connection, candidate: candidate)
+    }
+
+    private func clearRemoteContentForNewConnection() {
+        latestFrame = nil
+        videoFrameSize = nil
+        latestFrameMask = nil
+        wallpaper = nil
+        windows = []
+        streamDiagnostics = nil
+        developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+        isAwaitingStreamResetAfterSelection = false
+        streamDecodeGeneration += 1
+        videoDecoder.reset()
     }
 
     private nonisolated func handleConnectionState(_ connectionState: NWConnection.State, for connection: NWConnection?) {
@@ -457,8 +724,15 @@ final class RemoteFrameStreamClient: ObservableObject {
                 self.timeoutWorkItem = nil
                 let hostName = self.connectedHostName ?? "Mac"
                 self.consecutiveConnectionFailures = 0
-                self.state = .connected(hostName)
-                self.recordDiagnosticEvent("Connection ready: \(hostName).")
+                self.state = .connecting(hostName)
+                self.recordDiagnosticEvent("Connection ready, authenticating: \(hostName).")
+                if let candidate = self.activeCandidate,
+                   let pairedDevice = candidate.pairedDevice {
+                    self.sendEnvelope(.authRequest(self.pairingManager.authRequest(for: pairedDevice)))
+                } else {
+                    self.handleConnectionFailure("Pair this Mac before connecting.")
+                    return
+                }
                 self.receiveLength()
             }
         case .waiting(let error):
@@ -481,10 +755,40 @@ final class RemoteFrameStreamClient: ObservableObject {
         }
     }
 
-    private func receiveLength() {
-        connection?.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, isComplete, error in
+    private nonisolated func handlePairingConnectionState(
+        _ connectionState: NWConnection.State,
+        for connection: NWConnection?,
+        request: PairingRequest
+    ) {
+        switch connectionState {
+        case .ready:
             Task { @MainActor in
-                guard let self else { return }
+                guard self.connection === connection else { return }
+                self.recordDiagnosticEvent("Pairing connection ready.")
+                self.sendEnvelope(.pairingRequest(request))
+                self.pairingStatusMessage = "Pairing request sent. Approve it on your Mac."
+                self.receiveLength()
+            }
+        case .waiting(let error), .failed(let error):
+            Task { @MainActor in
+                guard self.connection === connection else { return }
+                self.handleConnectionFailure(error.localizedDescription)
+            }
+        case .cancelled:
+            Task { @MainActor in
+                guard self.connection === connection else { return }
+                self.handleConnectionFailure("Pairing connection cancelled.")
+            }
+        default:
+            break
+        }
+    }
+
+    private func receiveLength() {
+        let activeConnection = connection
+        activeConnection?.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self, weak activeConnection] data, _, isComplete, error in
+            Task { @MainActor in
+                guard let self, self.connection === activeConnection else { return }
 
                 if let error {
                     self.handleReceiveFailure(error.localizedDescription)
@@ -515,9 +819,10 @@ final class RemoteFrameStreamClient: ObservableObject {
     }
 
     private func receiveFrame(length: Int) {
-        connection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] data, _, isComplete, error in
+        let activeConnection = connection
+        activeConnection?.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self, weak activeConnection] data, _, isComplete, error in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.connection === activeConnection else { return }
 
                 if let error {
                     self.handleReceiveFailure(error.localizedDescription)
@@ -534,6 +839,7 @@ final class RemoteFrameStreamClient: ObservableObject {
                 }
 
                 self.handlePacket(data)
+                guard self.connection === activeConnection else { return }
                 self.receiveLength()
             }
         }
@@ -567,6 +873,7 @@ final class RemoteFrameStreamClient: ObservableObject {
             guard let message = try? JSONDecoder().decode(RemoteWindowListMessage.self, from: Data(imageData)) else {
                 return
             }
+            recordDiagnosticEvent("Received app list with \(message.windows.count) window(s).")
             windows = message.windows.map { window in
                 var updatedWindow = window
                 if updatedWindow.appIconPNGData == nil {
@@ -634,6 +941,38 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             applyHostInfo(message)
+        case .pairingResponse:
+            guard let response = try? JSONDecoder.apperture.decode(PairingResponse.self, from: Data(imageData)) else {
+                return
+            }
+            switch response.status {
+            case .accepted:
+                if let pairedDevice = response.pairedDevice {
+                    let hostName = response.hostProfile?.macDisplayName ?? pairingManager.pendingOffer?.macDisplayName ?? pairedDevice.displayName
+                    pairingManager.accept(pairedDevice, hostProfile: response.hostProfile)
+                    pairingStatusMessage = "Pairing approved. Connecting to \(hostName)..."
+                    state = .connected(hostName)
+                    recordDiagnosticEvent("Pairing accepted.")
+                    restart(automaticallyConnect: true)
+                }
+            case .rejected, .expired:
+                pairingManager.reject(response.message)
+                pairingStatusMessage = "Pairing failed: \(response.message ?? "Pairing was not accepted.")"
+                handleConnectionFailure(response.message ?? "Pairing was not accepted.")
+            }
+        case .authStatus:
+            guard let response = try? JSONDecoder.apperture.decode(PairingAuthStatus.self, from: Data(imageData)) else {
+                return
+            }
+            switch response.status {
+            case .accepted:
+                let hostName = connectedHostName ?? "Mac"
+                pairingStatusMessage = nil
+                state = .connected(hostName)
+                recordDiagnosticEvent("Authenticated with \(hostName).")
+            case .rejected:
+                handleConnectionFailure(response.message ?? "Authentication failed.")
+            }
         case .streamReset:
             isAwaitingStreamResetAfterSelection = false
             streamDecodeGeneration += 1
@@ -657,6 +996,9 @@ final class RemoteFrameStreamClient: ObservableObject {
     }
 
     private func handleConnectionFailure(_ message: String) {
+        let wasPairingConnection = activeCandidateID?.hasPrefix("pairing-") == true
+        let failedCandidateID = activeCandidateID
+        let wasManualSelection = failedCandidateID == manuallySelectedHostID
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
         latestFrame = nil
@@ -673,6 +1015,10 @@ final class RemoteFrameStreamClient: ObservableObject {
         connection = nil
         connectedHostName = nil
         activeCandidateID = nil
+        if let failedCandidateID, !wasPairingConnection {
+            hostReachability[failedCandidateID] = .unreachable
+            reachableEndpointOptions.removeValue(forKey: failedCandidateID)
+        }
         updateHostSummaries()
         updateDiagnostics { diagnostics in
             diagnostics.lastError = message
@@ -683,6 +1029,29 @@ final class RemoteFrameStreamClient: ObservableObject {
 
         guard browser != nil else {
             state = .failed(message)
+            return
+        }
+
+        if wasPairingConnection {
+            pairingStatusMessage = "Pairing failed: \(message)"
+            state = .failed(message)
+            return
+        }
+
+        pairingStatusMessage = nil
+
+        if wasManualSelection {
+            state = .failed(message)
+            return
+        }
+
+        let hasReachablePairedCandidate = candidates.contains { candidate in
+            candidate.pairedDevice != nil && hostReachability[candidate.id] == .reachable
+        }
+        guard hasReachablePairedCandidate else {
+            state = candidates.isEmpty || Self.isTransientDiscoveryResolutionFailure(message)
+                ? .searching
+                : .failed(message)
             return
         }
 
@@ -727,6 +1096,135 @@ final class RemoteFrameStreamClient: ObservableObject {
         queue.asyncAfter(deadline: .now() + 4.0, execute: workItem)
     }
 
+    private func refreshHostReachability() {
+        for candidate in candidates {
+            startReachabilityProbe(for: candidate)
+        }
+    }
+
+    private func startReachabilityProbe(for candidate: StreamEndpointCandidate) {
+        guard hostReachability[candidate.id] != .reachable else { return }
+        guard !reachabilityProbes.values.contains(where: { $0.candidateID == candidate.id }) else { return }
+        if candidate.id == activeCandidateID {
+            switch state {
+            case .connected, .live:
+                hostReachability[candidate.id] = .reachable
+                reachableEndpointOptions[candidate.id] = selectedEndpointOption(for: candidate)
+                updateHostSummaries()
+                return
+            case .idle, .searching, .connecting, .failed:
+                break
+            }
+        }
+
+        hostReachability[candidate.id] = .checking
+        updateHostSummaries()
+
+        for endpointOption in candidate.endpointOptions {
+            let probeID = "\(candidate.id)|\(endpointOption.id)"
+            let connection = NWConnection(to: endpointOption.endpoint, using: Self.connectionParameters())
+            let timeout = DispatchWorkItem { [weak self] in
+                Task { @MainActor in
+                    self?.finishReachabilityProbe(
+                        probeID: probeID,
+                        candidateID: candidate.id,
+                        endpointOption: endpointOption,
+                        status: .unreachable
+                    )
+                }
+            }
+
+            reachabilityProbes[probeID] = ReachabilityProbe(candidateID: candidate.id, connection: connection, timeout: timeout)
+            connection.stateUpdateHandler = { [weak self, weak connection] state in
+                Task { @MainActor in
+                    guard let self,
+                          let connection,
+                          self.reachabilityProbes[probeID]?.connection === connection else {
+                        return
+                    }
+
+                    switch state {
+                    case .ready:
+                        self.finishReachabilityProbe(
+                            probeID: probeID,
+                            candidateID: candidate.id,
+                            endpointOption: endpointOption,
+                            status: .reachable
+                        )
+                    case .failed:
+                        self.finishReachabilityProbe(
+                            probeID: probeID,
+                            candidateID: candidate.id,
+                            endpointOption: endpointOption,
+                            status: .unreachable
+                        )
+                    case .waiting, .cancelled:
+                        break
+                    default:
+                        break
+                    }
+                }
+            }
+
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + 1.5, execute: timeout)
+        }
+    }
+
+    private func finishReachabilityProbe(
+        probeID: String,
+        candidateID: String,
+        endpointOption: CandidateEndpointOption,
+        status: HostReachabilityStatus
+    ) {
+        guard let probe = reachabilityProbes.removeValue(forKey: probeID) else { return }
+        probe.timeout.cancel()
+        probe.connection.cancel()
+
+        if status == .reachable {
+            cancelReachabilityProbes(for: candidateID)
+            reachableEndpointOptions[candidateID] = endpointOption
+            hostReachability[candidateID] = .reachable
+            updateHostSummaries()
+            if allowsAutomaticConnection, connection == nil, retryWorkItem == nil {
+                connectToNextCandidate()
+            }
+            return
+        }
+
+        if !reachabilityProbes.values.contains(where: { $0.candidateID == candidateID }),
+           reachableEndpointOptions[candidateID] == nil {
+            hostReachability[candidateID] = .unreachable
+        }
+        updateHostSummaries()
+    }
+
+    private func cancelReachabilityProbes(for candidateID: String) {
+        let probeIDs = reachabilityProbes
+            .filter { $0.value.candidateID == candidateID }
+            .map(\.key)
+        for probeID in probeIDs {
+            guard let probe = reachabilityProbes.removeValue(forKey: probeID) else { continue }
+            probe.timeout.cancel()
+            probe.connection.cancel()
+        }
+    }
+
+    private func pruneReachabilityState() {
+        let candidateIDs = Set(candidates.map(\.id))
+        hostReachability = hostReachability.filter { candidateIDs.contains($0.key) }
+        reachableEndpointOptions = reachableEndpointOptions.filter { candidateIDs.contains($0.key) }
+
+        let staleProbeIDs = reachabilityProbes
+            .filter { !candidateIDs.contains($0.value.candidateID) }
+            .map(\.key)
+        for probeID in staleProbeIDs {
+            guard let probe = reachabilityProbes.removeValue(forKey: probeID) else { continue }
+            probe.timeout.cancel()
+            probe.connection.cancel()
+        }
+    }
+
     private func updateDiagnostics(_ update: (inout RemoteConnectionDiagnostics) -> Void) {
         var nextDiagnostics = diagnostics
         update(&nextDiagnostics)
@@ -735,16 +1233,31 @@ final class RemoteFrameStreamClient: ObservableObject {
 
     private func updateHostSummaries() {
         hosts = candidates.map { candidate in
-            RemoteHostSummary(
+            let endpointOption = selectedEndpointOption(for: candidate)
+            return RemoteHostSummary(
                 id: candidate.id,
                 name: candidate.name,
-                detail: candidate.endpointDescription,
+                detail: candidate.pairedDevice == nil ? "Pair before connecting" : endpointOption.detail,
                 symbolName: candidate.symbolName,
                 isSaved: candidate.isSaved,
                 isManual: candidate.isManual,
-                isActive: candidate.id == activeCandidateID
+                isActive: candidate.id == activeCandidateID,
+                canForget: candidate.pairedDevice != nil || candidate.isManual,
+                reachabilityStatus: hostReachability[candidate.id] ?? .unknown
             )
         }
+    }
+
+    private func selectedEndpointOption(for candidate: StreamEndpointCandidate) -> CandidateEndpointOption {
+        reachableEndpointOptions[candidate.id] ?? candidate.endpointOptions.first ?? CandidateEndpointOption(
+            endpoint: candidate.endpoint,
+            detail: candidate.endpointDescription,
+            priority: 0
+        )
+    }
+
+    private func selectedEndpoint(for candidate: StreamEndpointCandidate) -> NWEndpoint {
+        selectedEndpointOption(for: candidate).endpoint
     }
 
     private func applyHostInfo(_ message: RemoteHostInfoMessage) {
@@ -800,7 +1313,7 @@ final class RemoteFrameStreamClient: ObservableObject {
 private extension RemoteFrameStreamConfiguration.PacketType {
     var allowsDuringStreamSelectionResetWait: Bool {
         switch self {
-        case .wallpaper, .windowList, .appIcon, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo:
+        case .wallpaper, .windowList, .appIcon, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .pairingResponse, .authStatus:
             return true
         case .frame, .videoFormat, .videoFrame, .videoMask:
             return false
@@ -886,6 +1399,54 @@ struct RemoteHostSummary: Equatable, Identifiable {
     var isSaved: Bool
     var isManual: Bool
     var isActive: Bool
+    var canForget: Bool
+    var reachabilityStatus: HostReachabilityStatus
+}
+
+enum HostReachabilityStatus: Equatable {
+    case unknown
+    case checking
+    case reachable
+    case unreachable
+
+    var displayText: String {
+        switch self {
+        case .unknown:
+            return "Not checked"
+        case .checking:
+            return "Checking"
+        case .reachable:
+            return "Reachable"
+        case .unreachable:
+            return "Unavailable"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .unknown:
+            return "circle"
+        case .checking:
+            return "circle.dotted"
+        case .reachable:
+            return "circle.fill"
+        case .unreachable:
+            return "circle"
+        }
+    }
+
+    var tintColor: UIColor {
+        switch self {
+        case .unknown:
+            return UIColor.white.withAlphaComponent(0.34)
+        case .checking:
+            return .systemYellow
+        case .reachable:
+            return .systemGreen
+        case .unreachable:
+            return UIColor.white.withAlphaComponent(0.34)
+        }
+    }
 }
 
 struct RemoteConnectionDiagnostics: Equatable {
@@ -963,14 +1524,28 @@ private struct StreamEndpointCandidate: Equatable {
     var endpoint: NWEndpoint
     var detail: String?
     var isSaved: Bool
+    var pairedDevice: PairedDevice?
+    var endpointOptions: [CandidateEndpointOption]
     var symbolNameOverride: String?
 
-    init(id: String, name: String, endpoint: NWEndpoint, detail: String? = nil, isSaved: Bool = false) {
+    init(
+        id: String,
+        name: String,
+        endpoint: NWEndpoint,
+        detail: String? = nil,
+        isSaved: Bool = false,
+        pairedDevice: PairedDevice? = nil,
+        endpointOptions: [CandidateEndpointOption]? = nil
+    ) {
         self.id = id
         self.name = name
         self.endpoint = endpoint
         self.detail = detail
         self.isSaved = isSaved
+        self.pairedDevice = pairedDevice
+        self.endpointOptions = endpointOptions ?? [
+            CandidateEndpointOption(endpoint: endpoint, detail: detail ?? endpoint.displayAddress, priority: 0)
+        ]
         self.symbolNameOverride = nil
     }
 
@@ -980,6 +1555,10 @@ private struct StreamEndpointCandidate: Equatable {
         self.name = endpoint.serviceName?.replacingOccurrences(of: "Apperture ", with: "") ?? "Mac"
         self.detail = endpoint.displayAddress
         self.isSaved = false
+        self.pairedDevice = nil
+        self.endpointOptions = [
+            CandidateEndpointOption(endpoint: endpoint, detail: endpoint.displayAddress, priority: 0)
+        ]
         self.symbolNameOverride = nil
     }
 
@@ -999,6 +1578,9 @@ private struct StreamEndpointCandidate: Equatable {
         if let symbolNameOverride {
             return symbolNameOverride
         }
+        if let pairedDevice {
+            return pairedDevice.symbolName
+        }
 
         #if targetEnvironment(simulator)
         if id == "simulator-loopback" {
@@ -1010,8 +1592,31 @@ private struct StreamEndpointCandidate: Equatable {
     }
 
     static func == (lhs: StreamEndpointCandidate, rhs: StreamEndpointCandidate) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id &&
+            lhs.name == rhs.name &&
+            lhs.endpointOptions == rhs.endpointOptions &&
+            lhs.pairedDevice == rhs.pairedDevice
     }
+}
+
+private struct CandidateEndpointOption: Equatable {
+    var id: String
+    var endpoint: NWEndpoint
+    var detail: String
+    var priority: Int
+
+    init(endpoint: NWEndpoint, detail: String, priority: Int) {
+        self.id = String(describing: endpoint)
+        self.endpoint = endpoint
+        self.detail = detail
+        self.priority = priority
+    }
+}
+
+private struct ReachabilityProbe {
+    var candidateID: String
+    var connection: NWConnection
+    var timeout: DispatchWorkItem
 }
 
 private struct ManualStreamEndpoint: Codable, Equatable {

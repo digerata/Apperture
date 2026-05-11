@@ -406,6 +406,14 @@ final class iPhoneViewerViewController: UIViewController {
             self?.streamClient.connect(toHostID: host.id)
         }
 
+        hostConnectionView.onForgetHostRequested = { [weak self] host in
+            self?.streamClient.forgetHost(withID: host.id)
+        }
+
+        hostConnectionView.onPairMacTapped = { [weak self] in
+            self?.presentPairingScanner()
+        }
+
         hostConnectionView.onManualConnectRequested = { [weak self] host, _, _ in
             guard let self else { return }
             if let errorMessage = streamClient.connectManually(to: host) {
@@ -522,6 +530,7 @@ final class iPhoneViewerViewController: UIViewController {
             .sink { [weak self] state in
                 guard let self else { return }
                 toolbarView.streamState = state
+                hostConnectionView.streamState = state
                 if case .connected = state {
                     requestWindowList()
                 } else if case .live = state {
@@ -531,6 +540,13 @@ final class iPhoneViewerViewController: UIViewController {
                 }
                 attemptPendingResume()
                 updateFlowOverlays()
+            }
+            .store(in: &cancellables)
+
+        streamClient.$pairingStatusMessage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in
+                self?.hostConnectionView.pairingStatusMessage = message
             }
             .store(in: &cancellables)
 
@@ -642,7 +658,7 @@ final class iPhoneViewerViewController: UIViewController {
 
         switch streamClient.state {
         case .idle, .failed:
-            streamClient.restart()
+            streamClient.restart(automaticallyConnect: true)
         case .searching, .connecting, .connected, .live:
             break
         }
@@ -697,7 +713,7 @@ final class iPhoneViewerViewController: UIViewController {
 
         switch streamClient.state {
         case .idle, .failed:
-            streamClient.restart()
+            streamClient.restart(automaticallyConnect: true)
         case .searching, .connecting:
             break
         case .connected:
@@ -918,7 +934,7 @@ final class iPhoneViewerViewController: UIViewController {
                 self.updateFlowOverlays()
             }
         case .idle, .failed:
-            streamClient.restart()
+            streamClient.restart(automaticallyConnect: true)
             updateFlowOverlays()
         case .searching, .connecting:
             updateFlowOverlays()
@@ -1106,6 +1122,7 @@ final class iPhoneViewerViewController: UIViewController {
 
         let isLandscape = view.bounds.width > view.bounds.height
         toolbarView.usesLandscapeLayout = isLandscape
+        toolbarView.interfaceOrientation = view.window?.windowScene?.interfaceOrientation ?? .unknown
         mirrorLeadingConstraint?.constant = isLandscape ? max(16, view.safeAreaInsets.left + 16) : 0
         mirrorTrailingConstraint?.constant = isLandscape ? -max(16, view.safeAreaInsets.right + 16) : 0
         mirrorTopConstraint?.constant = isLandscape ? 0 : 76
@@ -1138,7 +1155,7 @@ final class iPhoneViewerViewController: UIViewController {
     private func toggleStreamConnection() {
         switch streamClient.state {
         case .idle, .failed:
-            streamClient.restart()
+            streamClient.restart(automaticallyConnect: true)
         case .searching, .connecting, .connected, .live:
             streamClient.stop()
         }
@@ -1163,14 +1180,186 @@ final class iPhoneViewerViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "OK", style: .cancel))
         present(alert, animated: true)
     }
+
+    private func presentPairingScanner() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            showPairingScanner()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.showPairingScanner()
+                    } else {
+                        self?.presentManualConnectError("Camera access is needed to scan a Mac pairing code.")
+                    }
+                }
+            }
+        case .denied, .restricted:
+            presentManualConnectError("Camera access is needed to scan a Mac pairing code.")
+        @unknown default:
+            presentManualConnectError("Camera access is unavailable.")
+        }
+    }
+
+    private func showPairingScanner() {
+        let scanner = QRCodeScannerViewController()
+        scanner.onCodeScanned = { [weak self, weak scanner] payload in
+            scanner?.dismiss(animated: true)
+            self?.handlePairingPayload(payload)
+        }
+        scanner.onCancel = { [weak scanner] in
+            scanner?.dismiss(animated: true)
+        }
+        present(scanner, animated: true)
+    }
+
+    private func handlePairingPayload(_ payload: String) {
+        guard let request = streamClient.pairingManager.beginPairing(from: payload),
+              let offer = streamClient.pairingManager.pendingOffer else {
+            presentManualConnectError(streamClient.pairingManager.lastPairingError ?? "Unable to read that pairing code.")
+            return
+        }
+
+        if let error = streamClient.connectForPairing(request: request, offer: offer) {
+            presentManualConnectError(error)
+        }
+    }
 }
 
-private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
+private final class QRCodeScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var onCodeScanned: (String) -> Void = { _ in }
+    var onCancel: () -> Void = {}
+
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private let instructionLabel = UILabel()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        configureCamera()
+        configureOverlay()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if !session.isRunning {
+            DispatchQueue.global(qos: .userInitiated).async { [session] in
+                session.startRunning()
+            }
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if session.isRunning {
+            session.stopRunning()
+        }
+    }
+
+    private func configureCamera() {
+        guard let device = AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else {
+            instructionLabel.text = "Camera unavailable."
+            return
+        }
+
+        session.addInput(input)
+
+        let output = AVCaptureMetadataOutput()
+        guard session.canAddOutput(output) else { return }
+        session.addOutput(output)
+        output.setMetadataObjectsDelegate(self, queue: .main)
+        output.metadataObjectTypes = [.qr]
+
+        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
+        previewLayer.videoGravity = .resizeAspectFill
+        view.layer.insertSublayer(previewLayer, at: 0)
+        self.previewLayer = previewLayer
+    }
+
+    private func configureOverlay() {
+        let cancelButton = UIButton(type: .system)
+        cancelButton.translatesAutoresizingMaskIntoConstraints = false
+        cancelButton.configuration = .filled()
+        cancelButton.configuration?.title = "Cancel"
+        cancelButton.configuration?.image = UIImage(systemName: "xmark")
+        cancelButton.addAction(UIAction { [weak self] _ in
+            self?.onCancel()
+        }, for: .touchUpInside)
+
+        instructionLabel.translatesAutoresizingMaskIntoConstraints = false
+        instructionLabel.text = "Scan the pairing code shown on your Mac."
+        instructionLabel.textColor = .white
+        instructionLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        instructionLabel.textAlignment = .center
+        instructionLabel.numberOfLines = 0
+
+        let guideView = UIView()
+        guideView.translatesAutoresizingMaskIntoConstraints = false
+        guideView.layer.borderColor = UIColor.white.withAlphaComponent(0.88).cgColor
+        guideView.layer.borderWidth = 3
+        guideView.layer.cornerRadius = 24
+
+        view.addSubview(guideView)
+        view.addSubview(instructionLabel)
+        view.addSubview(cancelButton)
+
+        NSLayoutConstraint.activate([
+            guideView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            guideView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            guideView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.68),
+            guideView.heightAnchor.constraint(equalTo: guideView.widthAnchor),
+
+            instructionLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            instructionLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+            instructionLabel.bottomAnchor.constraint(equalTo: guideView.topAnchor, constant: -24),
+
+            cancelButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            cancelButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            cancelButton.heightAnchor.constraint(equalToConstant: 48)
+        ])
+    }
+
+    func metadataOutput(
+        _ output: AVCaptureMetadataOutput,
+        didOutput metadataObjects: [AVMetadataObject],
+        from connection: AVCaptureConnection
+    ) {
+        guard let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              object.type == .qr,
+              let payload = object.stringValue else {
+            return
+        }
+
+        session.stopRunning()
+        onCodeScanned(payload)
+    }
+}
+
+private final class HostConnectionOverlayView: UIView, UITextFieldDelegate, UIContextMenuInteractionDelegate {
     var hosts: [RemoteHostSummary] = [] {
         didSet { reloadHosts() }
     }
 
+    var streamState: RemoteFrameStreamState = .idle {
+        didSet { updateStatusText() }
+    }
+
+    var pairingStatusMessage: String? {
+        didSet { updateStatusText() }
+    }
+
     var onHostSelected: (RemoteHostSummary) -> Void = { _ in }
+    var onForgetHostRequested: (RemoteHostSummary) -> Void = { _ in }
+    var onPairMacTapped: () -> Void = {}
     var onManualConnectRequested: (String, String?, String?) -> Void = { _, _, _ in }
     var onDiagnosticsTapped: () -> Void = {}
 
@@ -1256,7 +1445,7 @@ private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
         detailLabel.font = .systemFont(ofSize: 15, weight: .medium)
         detailLabel.textColor = UIColor.white.withAlphaComponent(0.72)
         detailLabel.numberOfLines = 2
-        detailLabel.text = "Pick a saved or nearby host, or connect to a new Mac by hostname."
+        updateStatusText()
 
         hostsStackView.axis = .vertical
         hostsStackView.spacing = 0
@@ -1265,9 +1454,9 @@ private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
         emptyStateLabel.textColor = UIColor.white.withAlphaComponent(0.64)
         emptyStateLabel.font = .systemFont(ofSize: 15, weight: .medium)
 
-        addHostButton.configuration = filledButtonConfiguration(title: "Connect to New Host", systemName: "plus")
+        addHostButton.configuration = filledButtonConfiguration(title: "Pair Mac", systemName: "qrcode.viewfinder")
         addHostButton.addAction(UIAction { [weak self] _ in
-            self?.showManualConnect()
+            self?.onPairMacTapped()
         }, for: .touchUpInside)
 
         diagnosticsButton.configuration = plainButtonConfiguration(title: "Diagnostics", systemName: "stethoscope")
@@ -1501,6 +1690,10 @@ private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
             button.addAction(UIAction { [weak self] _ in
                 self?.onHostSelected(host)
             }, for: .touchUpInside)
+            button.accessibilityIdentifier = host.id
+            if host.canForget {
+                button.addInteraction(UIContextMenuInteraction(delegate: self))
+            }
             button.heightAnchor.constraint(equalToConstant: 66).isActive = true
             hostsStackView.addArrangedSubview(button)
 
@@ -1513,6 +1706,44 @@ private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
         }
     }
 
+    private func updateStatusText() {
+        if let pairingStatusMessage, !pairingStatusMessage.isEmpty {
+            detailLabel.text = pairingStatusMessage
+            return
+        }
+
+        switch streamState {
+        case .idle:
+            detailLabel.text = "Pick a paired Mac, or scan a pairing code from a nearby Mac."
+        case .searching:
+            detailLabel.text = "Looking for paired Macs on your network."
+        case .connecting, .connected, .live, .failed:
+            detailLabel.text = streamState.detail
+        }
+    }
+
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configurationForMenuAtLocation location: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard let hostID = interaction.view?.accessibilityIdentifier,
+              let host = hosts.first(where: { $0.id == hostID && $0.canForget }) else {
+            return nil
+        }
+
+        return UIContextMenuConfiguration(identifier: hostID as NSString, previewProvider: nil) { [weak self] _ in
+            UIMenu(children: [
+                UIAction(
+                    title: "Forget Host",
+                    image: UIImage(systemName: "trash"),
+                    attributes: .destructive
+                ) { _ in
+                    self?.onForgetHostRequested(host)
+                }
+            ])
+        }
+    }
+
     private func hostButtonConfiguration(for host: RemoteHostSummary) -> UIButton.Configuration {
         var configuration = UIButton.Configuration.filled()
         configuration.baseBackgroundColor = host.isActive
@@ -1520,10 +1751,11 @@ private final class HostConnectionOverlayView: UIView, UITextFieldDelegate {
             : UIColor.white.withAlphaComponent(0.08)
         configuration.baseForegroundColor = .white
         configuration.cornerStyle = .medium
-        configuration.image = UIImage(systemName: host.symbolName)
+        configuration.image = UIImage(systemName: host.reachabilityStatus.symbolName)?
+            .withTintColor(host.reachabilityStatus.tintColor, renderingMode: .alwaysOriginal)
         configuration.imagePadding = 14
         configuration.title = host.name
-        configuration.subtitle = host.detail
+        configuration.subtitle = "\(host.reachabilityStatus.displayText) - \(host.detail)"
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
@@ -1688,6 +1920,7 @@ private final class AppLauncherOverlayView: UIView {
     private var recentGroupIDs = Set<String>()
     private var selectedGroup: RemoteApplicationWindowGroup?
     private var visibilityGeneration = 0
+    private var lastCollectionLayoutSize: CGSize = .zero
 
     override init(frame: CGRect) {
         let layout = UICollectionViewFlowLayout()
@@ -1704,6 +1937,11 @@ private final class AppLauncherOverlayView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        refreshCollectionLayoutIfNeeded()
+    }
+
     func configure(groups: [RemoteApplicationWindowGroup], recentGroupIDs: Set<String>, isLoading: Bool) {
         self.recentGroupIDs = recentGroupIDs
         self.groups = groups.sorted { lhs, rhs in
@@ -1715,6 +1953,7 @@ private final class AppLauncherOverlayView: UIView {
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
         collectionView.reloadData()
+        prepareCollectionForInteraction()
         loadingIndicator.isHidden = !isLoading || !self.groups.isEmpty
         if isLoading, self.groups.isEmpty {
             loadingIndicator.startAnimating()
@@ -1735,6 +1974,7 @@ private final class AppLauncherOverlayView: UIView {
 
         if visible {
             isHidden = false
+            prepareCollectionForInteraction()
         } else {
             hideWindowChooser(animated: false)
         }
@@ -1746,6 +1986,9 @@ private final class AppLauncherOverlayView: UIView {
         let animationCompletion: (Bool) -> Void = { _ in
             guard generation == self.visibilityGeneration else { return }
             self.isHidden = !visible
+            if visible {
+                self.prepareCollectionForInteraction()
+            }
             completion?()
         }
 
@@ -1753,7 +1996,7 @@ private final class AppLauncherOverlayView: UIView {
             UIView.animate(
                 withDuration: 0.22,
                 delay: 0,
-                options: [.beginFromCurrentState, .curveEaseOut],
+                options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction],
                 animations: updates,
                 completion: animationCompletion
             )
@@ -1761,6 +2004,29 @@ private final class AppLauncherOverlayView: UIView {
             updates()
             animationCompletion(true)
         }
+    }
+
+    private func prepareCollectionForInteraction() {
+        collectionView.allowsSelection = true
+        collectionView.collectionViewLayout.invalidateLayout()
+        setNeedsLayout()
+        layoutIfNeeded()
+        collectionView.setNeedsLayout()
+        collectionView.layoutIfNeeded()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isHidden else { return }
+            self.collectionView.collectionViewLayout.invalidateLayout()
+            self.collectionView.layoutIfNeeded()
+        }
+    }
+
+    private func refreshCollectionLayoutIfNeeded() {
+        let size = collectionView.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        guard size != lastCollectionLayoutSize else { return }
+        lastCollectionLayoutSize = size
+        collectionView.collectionViewLayout.invalidateLayout()
     }
 
     private func configureSubviews() {
@@ -1803,6 +2069,8 @@ private final class AppLauncherOverlayView: UIView {
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
+        collectionView.delaysContentTouches = false
+        collectionView.canCancelContentTouches = true
         collectionView.showsVerticalScrollIndicator = false
         collectionView.register(AppLauncherCell.self, forCellWithReuseIdentifier: AppLauncherCell.reuseIdentifier)
 
@@ -2009,6 +2277,7 @@ extension AppLauncherOverlayView: UICollectionViewDataSource, UICollectionViewDe
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let group = groups[indexPath.item]
         guard group.windows.count > 1 else {
             if let window = group.windows.first {
@@ -2075,9 +2344,18 @@ extension AppLauncherOverlayView: UITableViewDataSource, UITableViewDelegate {
 private final class AppLauncherCell: UICollectionViewCell {
     static let reuseIdentifier = "AppLauncherCell"
 
+    private let selectionBackgroundView = UIView()
     private let iconView = UIImageView()
     private let nameLabel = UILabel()
     private let badgeLabel = UILabel()
+
+    override var isHighlighted: Bool {
+        didSet { updateInteractionState(animated: true) }
+    }
+
+    override var isSelected: Bool {
+        didSet { updateInteractionState(animated: true) }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2104,8 +2382,21 @@ private final class AppLauncherCell: UICollectionViewCell {
         }
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        updateInteractionState(animated: false)
+    }
+
     private func configureSubviews() {
         contentView.backgroundColor = .clear
+
+        selectionBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+        selectionBackgroundView.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        selectionBackgroundView.alpha = 0
+        selectionBackgroundView.layer.cornerRadius = 18
+        selectionBackgroundView.layer.cornerCurve = .continuous
+        selectionBackgroundView.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        selectionBackgroundView.layer.borderWidth = 1
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.contentMode = .scaleAspectFit
@@ -2130,11 +2421,17 @@ private final class AppLauncherCell: UICollectionViewCell {
         badgeLabel.layer.cornerCurve = .continuous
         badgeLabel.clipsToBounds = true
 
+        contentView.addSubview(selectionBackgroundView)
         contentView.addSubview(iconView)
         contentView.addSubview(nameLabel)
         contentView.addSubview(badgeLabel)
 
         NSLayoutConstraint.activate([
+            selectionBackgroundView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            selectionBackgroundView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            selectionBackgroundView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: -8),
+            selectionBackgroundView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -2),
+
             iconView.topAnchor.constraint(equalTo: contentView.topAnchor),
             iconView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             iconView.widthAnchor.constraint(equalToConstant: 58),
@@ -2149,6 +2446,30 @@ private final class AppLauncherCell: UICollectionViewCell {
             nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2),
             nameLabel.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 9)
         ])
+
+        updateInteractionState(animated: false)
+    }
+
+    private func updateInteractionState(animated: Bool) {
+        let isPressed = isHighlighted
+        let isActive = isHighlighted || isSelected
+        let updates = {
+            self.selectionBackgroundView.alpha = isActive ? 1 : 0
+            self.selectionBackgroundView.backgroundColor = UIColor.white.withAlphaComponent(isPressed ? 0.18 : 0.12)
+            self.contentView.transform = isPressed ? CGAffineTransform(scaleX: 0.96, y: 0.96) : .identity
+            self.nameLabel.textColor = isActive ? .white : UIColor.white.withAlphaComponent(0.88)
+        }
+
+        if animated {
+            UIView.animate(
+                withDuration: isPressed ? 0.10 : 0.18,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction],
+                animations: updates
+            )
+        } else {
+            updates()
+        }
     }
 }
 
@@ -2185,6 +2506,12 @@ private final class ViewerToolbarView: UIView {
     private let settingsButton = ViewerToolbarView.makeButton(systemName: "gearshape")
     private let statusDotView = UIView()
     private let rightStackView = UIStackView()
+    var interfaceOrientation: UIInterfaceOrientation = .unknown {
+        didSet {
+            guard interfaceOrientation != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
     var usesLandscapeLayout = false {
         didSet {
             guard usesLandscapeLayout != oldValue else { return }
@@ -2252,16 +2579,19 @@ private final class ViewerToolbarView: UIView {
         super.layoutSubviews()
 
         if usesLandscapeLayout {
-            let leftInset = max(20, safeAreaInsets.left + 20)
+            let islandSide = dynamicIslandSide()
+            let sideInset = max(20, islandSide == .left ? safeAreaInsets.left + 20 : safeAreaInsets.right + 20)
+            let buttonX = islandSide == .left ? sideInset : bounds.width - sideInset - 44
             let railCenterY = bounds.height / 2
+            let rotationAngle: CGFloat = islandSide == .left ? .pi / 2 : -.pi / 2
 
-            exitButton.transform = CGAffineTransform(rotationAngle: .pi / 2)
-            keyboardButton.transform = CGAffineTransform(rotationAngle: .pi / 2)
-            settingsButton.transform = CGAffineTransform(rotationAngle: .pi / 2)
+            exitButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
+            keyboardButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
+            settingsButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
 
-            exitButton.frame = CGRect(x: leftInset, y: railCenterY - 22, width: 44, height: 44)
+            exitButton.frame = CGRect(x: buttonX, y: railCenterY - 74, width: 44, height: 44)
             rightStackView.axis = .vertical
-            rightStackView.frame = CGRect(x: leftInset, y: railCenterY + 52, width: 44, height: 96)
+            rightStackView.frame = CGRect(x: buttonX, y: railCenterY + 30, width: 44, height: 96)
         } else {
             exitButton.transform = .identity
             keyboardButton.transform = .identity
@@ -2276,6 +2606,26 @@ private final class ViewerToolbarView: UIView {
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         [exitButton, keyboardButton, settingsButton].contains { button in
             button.point(inside: convert(point, to: button), with: event)
+        }
+    }
+
+    private enum IslandSide {
+        case left
+        case right
+    }
+
+    private func dynamicIslandSide() -> IslandSide {
+        if abs(safeAreaInsets.left - safeAreaInsets.right) > 1 {
+            return safeAreaInsets.left > safeAreaInsets.right ? .left : .right
+        }
+
+        switch interfaceOrientation {
+        case .landscapeLeft:
+            return .left
+        case .landscapeRight:
+            return .right
+        default:
+            return .left
         }
     }
 

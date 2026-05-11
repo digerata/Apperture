@@ -13,6 +13,8 @@ enum RemoteFrameStreamConfiguration {
         case streamReset = 8
         case hostInfo = 9
         case appIcon = 10
+        case pairingResponse = 11
+        case authStatus = 12
     }
 
     static let bonjourType = "_apperture._tcp"
