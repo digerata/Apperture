@@ -2505,7 +2505,6 @@ private final class ViewerToolbarView: UIView {
     private let keyboardButton = ViewerToolbarView.makeButton(systemName: "keyboard")
     private let settingsButton = ViewerToolbarView.makeButton(systemName: "gearshape")
     private let statusDotView = UIView()
-    private let rightStackView = UIStackView()
     var interfaceOrientation: UIInterfaceOrientation = .unknown {
         didSet {
             guard interfaceOrientation != oldValue else { return }
@@ -2537,16 +2536,10 @@ private final class ViewerToolbarView: UIView {
         isUserInteractionEnabled = true
 
         exitButton.translatesAutoresizingMaskIntoConstraints = false
-        rightStackView.translatesAutoresizingMaskIntoConstraints = false
-        rightStackView.alignment = .center
-        rightStackView.distribution = .fill
-        rightStackView.spacing = 8
-
-        rightStackView.addArrangedSubview(keyboardButton)
-        rightStackView.addArrangedSubview(settingsButton)
 
         addSubview(exitButton)
-        addSubview(rightStackView)
+        addSubview(keyboardButton)
+        addSubview(settingsButton)
 
         statusDotView.translatesAutoresizingMaskIntoConstraints = false
         statusDotView.layer.cornerRadius = 4
@@ -2580,26 +2573,48 @@ private final class ViewerToolbarView: UIView {
 
         if usesLandscapeLayout {
             let islandSide = dynamicIslandSide()
-            let sideInset = max(20, islandSide == .left ? safeAreaInsets.left + 20 : safeAreaInsets.right + 20)
-            let buttonX = islandSide == .left ? sideInset : bounds.width - sideInset - 44
-            let railCenterY = bounds.height / 2
+            let edgeInset: CGFloat = 20
+            let edgeButtonFrameSize: CGFloat = 44
+            let buttonSpacing: CGFloat = 8
             let rotationAngle: CGFloat = islandSide == .left ? .pi / 2 : -.pi / 2
+            let edgeCenterOffset = edgeInset + edgeButtonFrameSize / 2
+
+            UIView.performWithoutAnimation {
+                [exitButton, keyboardButton, settingsButton].forEach { button in
+                    button.bounds = CGRect(origin: .zero, size: CGSize(width: edgeButtonFrameSize, height: edgeButtonFrameSize))
+                }
+
+                switch islandSide {
+                case .left:
+                    exitButton.center = CGPoint(x: edgeCenterOffset, y: bounds.height - edgeCenterOffset)
+                    settingsButton.center = CGPoint(x: edgeCenterOffset, y: edgeCenterOffset)
+                    keyboardButton.center = CGPoint(x: edgeCenterOffset, y: edgeCenterOffset + edgeButtonFrameSize + buttonSpacing)
+                case .right:
+                    let x = bounds.width - edgeCenterOffset
+                    exitButton.center = CGPoint(x: x, y: edgeCenterOffset)
+                    keyboardButton.center = CGPoint(x: x, y: bounds.height - edgeCenterOffset - edgeButtonFrameSize - buttonSpacing)
+                    settingsButton.center = CGPoint(x: x, y: bounds.height - edgeCenterOffset)
+                }
+            }
 
             exitButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
             keyboardButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
             settingsButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
-
-            exitButton.frame = CGRect(x: buttonX, y: railCenterY - 74, width: 44, height: 44)
-            rightStackView.axis = .vertical
-            rightStackView.frame = CGRect(x: buttonX, y: railCenterY + 30, width: 44, height: 96)
         } else {
+            let edgeButtonFrameSize: CGFloat = 44
+            UIView.performWithoutAnimation {
+                [exitButton, keyboardButton, settingsButton].forEach { button in
+                    button.bounds = CGRect(origin: .zero, size: CGSize(width: edgeButtonFrameSize, height: edgeButtonFrameSize))
+                }
+
+                exitButton.center = CGPoint(x: 42, y: 42)
+                keyboardButton.center = CGPoint(x: bounds.width - 94, y: 42)
+                settingsButton.center = CGPoint(x: bounds.width - 42, y: 42)
+            }
+
             exitButton.transform = .identity
             keyboardButton.transform = .identity
             settingsButton.transform = .identity
-
-            exitButton.frame = CGRect(x: 20, y: 20, width: 44, height: 44)
-            rightStackView.axis = .horizontal
-            rightStackView.frame = CGRect(x: bounds.width - 116, y: 20, width: 96, height: 44)
         }
     }
 
@@ -2615,15 +2630,11 @@ private final class ViewerToolbarView: UIView {
     }
 
     private func dynamicIslandSide() -> IslandSide {
-        if abs(safeAreaInsets.left - safeAreaInsets.right) > 1 {
-            return safeAreaInsets.left > safeAreaInsets.right ? .left : .right
-        }
-
         switch interfaceOrientation {
         case .landscapeLeft:
-            return .left
-        case .landscapeRight:
             return .right
+        case .landscapeRight:
+            return .left
         default:
             return .left
         }
