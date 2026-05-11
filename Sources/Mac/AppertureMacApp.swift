@@ -113,6 +113,7 @@ private struct HostMenuBarLabel: View {
                     .frame(width: 5, height: 5)
             }
         }
+        .background(MenuBarAnchorReader())
     }
 }
 
@@ -219,5 +220,181 @@ final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.windows.first?.makeKeyAndOrderFront(nil)
+    }
+}
+
+struct HostSecurityAlert {
+    var title: String
+    var systemImage: String
+    var tint: NSColor
+}
+
+@MainActor
+final class HostSecurityAlertPresenter {
+    static let shared = HostSecurityAlertPresenter()
+
+    private let panelSize = CGSize(width: 340, height: 72)
+    private var panel: NSPanel?
+    private var pendingAlerts: [HostSecurityAlert] = []
+    private var dismissWorkItem: DispatchWorkItem?
+    private var isShowingAlert = false
+    private var menuBarAnchorRect: CGRect?
+
+    private init() {}
+
+    func show(_ alert: HostSecurityAlert) {
+        pendingAlerts.append(alert)
+        showNextAlertIfNeeded()
+    }
+
+    func updateMenuBarAnchor(_ rect: CGRect) {
+        guard rect.width > 0, rect.height > 0 else { return }
+        menuBarAnchorRect = rect
+    }
+
+    private func showNextAlertIfNeeded() {
+        guard !isShowingAlert, !pendingAlerts.isEmpty else { return }
+        isShowingAlert = true
+
+        let alert = pendingAlerts.removeFirst()
+        let panel = makePanelIfNeeded()
+        panel.contentView = NSHostingView(rootView: HostSecurityAlertView(alert: alert))
+        panel.setFrame(positionedFrame(for: panel), display: true)
+        panel.orderFrontRegardless()
+
+        dismissWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                self?.hideCurrentAlert()
+            }
+        }
+        dismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: workItem)
+    }
+
+    private func hideCurrentAlert() {
+        panel?.orderOut(nil)
+        isShowingAlert = false
+        showNextAlertIfNeeded()
+    }
+
+    private func makePanelIfNeeded() -> NSPanel {
+        if let panel {
+            return panel
+        }
+
+        let panel = NSPanel(
+            contentRect: CGRect(origin: .zero, size: panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .statusBar
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        self.panel = panel
+        return panel
+    }
+
+    private func positionedFrame(for panel: NSPanel) -> CGRect {
+        if let menuBarAnchorRect {
+            let screen = NSScreen.screens.first { screen in
+                screen.frame.intersects(menuBarAnchorRect)
+            } ?? NSScreen.main
+            let visibleFrame = screen?.visibleFrame ?? .zero
+            let x = min(
+                max(menuBarAnchorRect.midX - panelSize.width / 2, visibleFrame.minX + 8),
+                visibleFrame.maxX - panelSize.width - 8
+            )
+
+            return CGRect(
+                x: x,
+                y: max(visibleFrame.minY + 8, menuBarAnchorRect.minY - panelSize.height - 8),
+                width: panelSize.width,
+                height: panelSize.height
+            )
+        }
+
+        let screen = NSScreen.screens.first { screen in
+            screen.frame.contains(NSEvent.mouseLocation)
+        } ?? NSScreen.main
+
+        let visibleFrame = screen?.visibleFrame ?? .zero
+        return CGRect(
+            x: visibleFrame.maxX - panelSize.width - 12,
+            y: visibleFrame.maxY - panelSize.height - 8,
+            width: panelSize.width,
+            height: panelSize.height
+        )
+    }
+}
+
+private struct MenuBarAnchorReader: NSViewRepresentable {
+    func makeNSView(context: Context) -> MenuBarAnchorView {
+        MenuBarAnchorView()
+    }
+
+    func updateNSView(_ nsView: MenuBarAnchorView, context: Context) {
+        nsView.publishAnchorRect()
+    }
+}
+
+private final class MenuBarAnchorView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        publishAnchorRect()
+    }
+
+    override func layout() {
+        super.layout()
+        publishAnchorRect()
+    }
+
+    func publishAnchorRect() {
+        guard let window else { return }
+        let rectInWindow = convert(bounds, to: nil)
+        let rectInScreen = window.convertToScreen(rectInWindow)
+        Task { @MainActor in
+            HostSecurityAlertPresenter.shared.updateMenuBarAnchor(rectInScreen)
+        }
+    }
+}
+
+private struct HostSecurityAlertView: View {
+    var alert: HostSecurityAlert
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: alert.systemImage)
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(Color(nsColor: alert.tint))
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(alert.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                Text("Apperture is active")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(width: 340, height: 72)
+        .background(.regularMaterial)
+        .clipShape(.rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        }
     }
 }

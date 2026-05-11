@@ -8,8 +8,16 @@ final class HostModel: ObservableObject {
     @Published var selectedWindowID: MirrorWindow.ID?
     @Published private(set) var permissions = HostPermissionState.current
     @Published private(set) var liveFrame: CGImage?
-    @Published private(set) var streamStatus: LiveStreamStatus = .idle
-    @Published private(set) var frameServerStatus: FrameServerStatus = .offline
+    @Published private(set) var streamStatus: LiveStreamStatus = .idle {
+        didSet {
+            handleStreamStatusChange(from: oldValue, to: streamStatus)
+        }
+    }
+    @Published private(set) var frameServerStatus: FrameServerStatus = .offline {
+        didSet {
+            handleConnectedClientsChange(from: oldValue.connectedClients, to: frameServerStatus.connectedClients)
+        }
+    }
     @Published private(set) var connectionHints: [HostConnectionHint] = []
     @Published private(set) var developerActivity = DeveloperActivityState(
         eventDirectoryPath: AgentEventBridgeService.defaultEventDirectoryURL.path
@@ -29,6 +37,7 @@ final class HostModel: ObservableObject {
     private var latestCaptureScreenFrame: CGRect?
     private var activeAuditSessionIDs: [UUID: String] = [:]
     private var pendingPairingConnectionID: UUID?
+    private var activeStreamingApplicationName: String?
 
     init(startsServices: Bool = true) {
         guard startsServices else { return }
@@ -396,6 +405,62 @@ final class HostModel: ObservableObject {
         startLiveView()
     }
 
+    private func handleStreamStatusChange(from oldStatus: LiveStreamStatus, to newStatus: LiveStreamStatus) {
+        guard oldStatus.isRunning != newStatus.isRunning || newStatus.isRunning else { return }
+
+        if newStatus.isRunning {
+            let applicationName = selectedWindow?.applicationName ?? newStatus.targetName ?? "selected app"
+            if applicationName != activeStreamingApplicationName {
+                activeStreamingApplicationName = applicationName
+                HostSecurityAlertPresenter.shared.show(
+                    HostSecurityAlert(
+                        title: "Started streaming \(applicationName)",
+                        systemImage: "record.circle",
+                        tint: .systemBlue
+                    )
+                )
+            }
+            return
+        }
+
+        let applicationName = activeStreamingApplicationName ?? selectedWindow?.applicationName ?? oldStatus.targetName ?? "selected app"
+        activeStreamingApplicationName = nil
+        HostSecurityAlertPresenter.shared.show(
+            HostSecurityAlert(
+                title: "Stopped streaming \(applicationName)",
+                systemImage: "stop.circle",
+                tint: .systemGray
+            )
+        )
+    }
+
+    private func handleConnectedClientsChange(from oldClients: [ConnectedFrameClient], to newClients: [ConnectedFrameClient]) {
+        let oldIDs = Set(oldClients.map(\.id))
+        let newIDs = Set(newClients.map(\.id))
+        let connectedClients = newClients.filter { !oldIDs.contains($0.id) }
+        let disconnectedClients = oldClients.filter { !newIDs.contains($0.id) }
+
+        for client in connectedClients {
+            HostSecurityAlertPresenter.shared.show(
+                HostSecurityAlert(
+                    title: "\(client.displayName) connected",
+                    systemImage: client.symbolName,
+                    tint: .systemGreen
+                )
+            )
+        }
+
+        for client in disconnectedClients {
+            HostSecurityAlertPresenter.shared.show(
+                HostSecurityAlert(
+                    title: "\(client.displayName) disconnected",
+                    systemImage: client.symbolName,
+                    tint: .systemOrange
+                )
+            )
+        }
+    }
+
     private func publishWindowList(includeApplicationIcons: Bool = true) {
         let streamableWindows = windows.filter { window in
             window.ownerName != "Apperture"
@@ -510,6 +575,15 @@ enum LiveStreamStatus: Equatable {
             return true
         case .idle, .failed:
             return false
+        }
+    }
+
+    var targetName: String? {
+        switch self {
+        case .starting(let target), .live(let target):
+            return target
+        case .idle, .failed:
+            return nil
         }
     }
 }
