@@ -58,6 +58,18 @@ require_tool xcrun
 require_tool ditto
 require_tool hdiutil
 
+if [[ "${SKIP_SIGNING_IDENTITY_CHECK:-0}" != "1" ]]; then
+  echo "Checking for Developer ID Application signing identity..."
+  if ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+    cat >&2 <<EOF
+error: no Developer ID Application signing identity with private key was found.
+Install/export a Developer ID Application certificate that includes its private key,
+or import it into the CI keychain before running this script.
+EOF
+    exit 1
+  fi
+fi
+
 rm -rf "$BUILD_ROOT"
 mkdir -p "$EXPORT_PATH" "$ARTIFACTS_PATH"
 
