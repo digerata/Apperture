@@ -20,13 +20,17 @@ Apple's current command-line flow uses `notarytool` and `stapler`. The older `al
 | `DEVELOPER_ID_APPLICATION_CERT_PASSWORD` | Password used when exporting the `.p12`. |
 | `RELEASE_KEYCHAIN_PASSWORD` | Random password for the temporary CI keychain. |
 | `SPARKLE_PRIVATE_ED_KEY` | Optional Sparkle EdDSA private key for generating `appcast.xml`. |
+| `SPARKLE_PUBLIC_ED_KEY` | Optional alternative to storing the public key as a variable. |
+| `SPARKLE_FEED_URL` | Optional alternative to storing the feed URL as a variable. |
+| `SPARKLE_DOWNLOAD_URL_PREFIX` | Optional alternative to storing the download URL prefix as a variable. |
 
 Add these GitHub Actions variables:
 
 | Variable | Value |
 | --- | --- |
-| `SPARKLE_FEED_URL` | Public appcast URL, for example `https://example.com/apperture/appcast.xml`. |
+| `SPARKLE_FEED_URL` | Public appcast URL, defaulting to `https://runaperture.com/releases/appcast.xml`. |
 | `SPARKLE_PUBLIC_ED_KEY` | Public EdDSA key printed by Sparkle `generate_keys`. |
+| `SPARKLE_DOWNLOAD_URL_PREFIX` | Public folder where the DMG will be hosted, defaulting to `https://runaperture.com/releases`. |
 
 Encode the `.p12` for GitHub:
 
@@ -94,9 +98,10 @@ One-time Sparkle key setup:
    ./generate_keys
    ```
 
-4. Save the printed public key as GitHub Actions variable `SPARKLE_PUBLIC_ED_KEY`.
+4. Save the printed public key as GitHub Actions variable or secret `SPARKLE_PUBLIC_ED_KEY`.
 5. Export or copy the private key into GitHub secret `SPARKLE_PRIVATE_ED_KEY`.
 6. Set `SPARKLE_FEED_URL` to the final HTTPS URL where `appcast.xml` will live.
+7. Set `SPARKLE_DOWNLOAD_URL_PREFIX` to the final HTTPS folder where the DMG will live.
 
 The release script passes `SPARKLE_FEED_URL` and `SPARKLE_PUBLIC_ED_KEY` into the archived app. If `SPARKLE_PRIVATE_ED_KEY` is available, it runs Sparkle's `generate_appcast` and signs the update feed.
 

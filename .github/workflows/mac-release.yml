@@ -24,9 +24,10 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
       NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-      SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
-      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+      SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL || secrets.SPARKLE_FEED_URL || 'https://runaperture.com/releases/appcast.xml' }}
+      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY || secrets.SPARKLE_PUBLIC_ED_KEY }}
       SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+      SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX || secrets.SPARKLE_DOWNLOAD_URL_PREFIX || 'https://runaperture.com/releases' }}
       P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
       KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
 

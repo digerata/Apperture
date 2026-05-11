@@ -9,9 +9,9 @@ TEAM_ID="${APPLE_TEAM_ID:-VY76D5S364}"
 PRODUCT_NAME="${PRODUCT_NAME:-Apperture}"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.landmk1.apperture}"
 DEVELOPER_ID_IDENTITY="${DEVELOPER_ID_IDENTITY:-Developer ID Application}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://example.com/apperture/appcast.xml}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://runaperture.com/releases/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
-SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX:-${GITHUB_REPOSITORY:+https://github.com/$GITHUB_REPOSITORY/releases/download/${GITHUB_REF_NAME:-latest}}}"
+SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX:-https://runaperture.com/releases}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/build/mac-release}"
 ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_ROOT/export"
@@ -189,7 +189,7 @@ echo "Writing SHA-256 checksum..."
 shasum -a 256 "$DMG_PATH" | tee "$DMG_PATH.sha256"
 
 if [[ -n "${SPARKLE_PRIVATE_ED_KEY:-}" ]]; then
-  if [[ -z "$SPARKLE_PUBLIC_ED_KEY" || "$SPARKLE_FEED_URL" == *"example.com"* ]]; then
+  if [[ -z "$SPARKLE_PUBLIC_ED_KEY" || -z "$SPARKLE_FEED_URL" ]]; then
     cat >&2 <<EOF
 error: SPARKLE_PRIVATE_ED_KEY is set, but Sparkle is not fully configured.
 Set SPARKLE_PUBLIC_ED_KEY and SPARKLE_FEED_URL before generating an appcast.
