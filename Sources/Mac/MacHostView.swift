@@ -2,170 +2,939 @@ import AppKit
 import SwiftUI
 
 struct MacHostView: View {
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var hostModel: HostModel
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 280, ideal: 340)
-        } detail: {
-            previewPane
+        VStack(spacing: 0) {
+            header
+
+            Divider()
+
+            dashboard
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             hostModel.refreshAll()
         }
     }
 
-    private var sidebar: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Apperture")
-                            .font(.title2.weight(.semibold))
-                        Text("Mac Host")
-                            .foregroundStyle(.secondary)
-                    }
+    private var header: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Apperture Host")
+                    .font(.title2.weight(.semibold))
 
-                    Spacer()
+                Text(headerDetail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
 
-                    Button {
-                        hostModel.refreshAll()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Refresh")
+            Spacer()
+
+            Button {
+                openWindow(id: "pairing")
+            } label: {
+                Label("Pair iPhone", systemImage: "qrcode.viewfinder")
+            }
+
+            Button {
+                openWindow(id: "sessions")
+            } label: {
+                Label("Sessions", systemImage: "clock.arrow.circlepath")
+            }
+
+            SettingsLink {
+                Label("Settings", systemImage: "gearshape")
+            }
+
+            Button {
+                hostModel.refreshAll()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("Refresh host status")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+
+    private var dashboard: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                StatusBadgeRow()
+                    .environmentObject(hostModel)
+
+                if hasPermissionIssue {
+                    PermissionSummaryView()
+                        .environmentObject(hostModel)
                 }
 
-                PermissionSummaryView()
-                FrameServerSummaryView()
-                PairingSummaryView(pairingManager: hostModel.pairingManager)
-                DeveloperActivitySummaryView()
-                if hostModel.windowShapeProbeState.isVisible {
-                    WindowShapeProbeSummaryView()
+                HStack(alignment: .top, spacing: 20) {
+                    CurrentMirrorPanel()
+                        .environmentObject(hostModel)
+
+                    HostReadinessPanel()
+                        .environmentObject(hostModel)
+                        .frame(width: 280)
+                }
+
+                DisclosureGroup("Connection Details") {
+                    ConnectionDetailsView()
+                        .environmentObject(hostModel)
+                        .padding(.top, 8)
+                }
+                .font(.system(size: 13, weight: .medium))
+                .padding(12)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(.rect(cornerRadius: 10))
+
+                if shouldShowDeveloperActivity {
+                    DeveloperActivitySummaryView()
+                        .environmentObject(hostModel)
                 }
             }
-            .padding(20)
-
-            Divider()
-
-            List(selection: $hostModel.selectedWindowID) {
-                ForEach(ApplicationWindowGroup.make(from: hostModel.windows)) { group in
-                    Section {
-                        ForEach(group.windows) { window in
-                            WindowRow(window: window)
-                                .tag(window.id)
-                        }
-                    } header: {
-                        ApplicationGroupHeader(group: group)
-                    }
-                }
-            }
-            .listStyle(.sidebar)
+            .padding(24)
         }
     }
 
-    private var previewPane: some View {
-        VStack(spacing: 0) {
-            HostToolbarView()
+    private var hasPermissionIssue: Bool {
+        !hostModel.permissions.screenCaptureGranted || !hostModel.permissions.accessibilityGranted
+    }
 
-            Divider()
+    private var shouldShowDeveloperActivity: Bool {
+        guard let latestEvent = hostModel.developerActivity.latestEvent else { return false }
+        return latestEvent.isActive || latestEvent.isFailure
+    }
 
-            GeometryReader { proxy in
-                ZStack {
-                    Color(nsColor: .windowBackgroundColor)
+    private var headerDetail: String {
+        if hostModel.streamStatus.isRunning, let selectedWindow = hostModel.selectedWindow {
+            return "Mirroring \(selectedWindow.applicationName) to \(clientText)."
+        }
 
-                    VStack(spacing: 20) {
-                        CapturePreviewView(
-                            image: hostModel.liveFrame,
-                            selectedWindow: hostModel.selectedWindow,
-                            availableSize: proxy.size
-                        )
+        return "Ready for iPhone-driven mirroring."
+    }
 
-                        StatusStripView(status: hostModel.streamStatus)
-                    }
-                    .padding(24)
-                }
-            }
+    private var clientText: String {
+        let count = hostModel.connectedClients.count
+        guard count > 0 else { return "no clients" }
+        if count == 1, let client = hostModel.connectedClients.first {
+            return client.displayName
+        }
+        return "\(count) clients"
+    }
+}
+
+private struct StatusBadgeRow: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            StatusBadge(
+                title: serverTitle,
+                systemImage: "antenna.radiowaves.left.and.right",
+                color: serverColor
+            )
+
+            StatusBadge(
+                title: hostModel.streamStatus.isRunning ? "Mirroring" : "Idle",
+                systemImage: hostModel.streamStatus.isRunning ? "rectangle.on.rectangle" : "pause.circle",
+                color: hostModel.streamStatus.isRunning ? .blue : .secondary
+            )
+
+            StatusBadge(
+                title: clientTitle,
+                systemImage: hostModel.connectedClients.isEmpty ? "iphone.slash" : "iphone.radiowaves.left.and.right",
+                color: hostModel.connectedClients.isEmpty ? .secondary : .green
+            )
+
+            StatusBadge(
+                title: permissionsTitle,
+                systemImage: permissionsOK ? "checkmark.shield" : "exclamationmark.shield",
+                color: permissionsOK ? .green : .orange
+            )
+        }
+    }
+
+    private var permissionsOK: Bool {
+        hostModel.permissions.screenCaptureGranted && hostModel.permissions.accessibilityGranted
+    }
+
+    private var permissionsTitle: String {
+        permissionsOK ? "Permissions OK" : "Needs Permission"
+    }
+
+    private var clientTitle: String {
+        let count = hostModel.connectedClients.count
+        return count == 0 ? "No Client" : "\(count) Client\(count == 1 ? "" : "s")"
+    }
+
+    private var serverTitle: String {
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return "Offline"
+        case .online:
+            return "Ready"
+        case .failed:
+            return "Server Issue"
+        }
+    }
+
+    private var serverColor: Color {
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return .secondary
+        case .online:
+            return .green
+        case .failed:
+            return .orange
         }
     }
 }
 
-private struct WindowShapeProbeSummaryView: View {
+private struct StatusBadge: View {
+    var title: String
+    var systemImage: String
+    var color: Color
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(.capsule)
+    }
+}
+
+private struct CurrentMirrorPanel: View {
     @EnvironmentObject private var hostModel: HostModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                Image(systemName: symbolName)
-                    .foregroundStyle(symbolColor)
-                    .frame(width: 20)
+                if let icon = mirroredWindowIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 32, height: 32)
+                } else {
+                    Image(systemName: mirroredWindow?.targetKind.symbolName ?? "macwindow")
+                        .font(.system(size: 26))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(hostModel.windowShapeProbeState.title)
-                        .font(.system(size: 13, weight: .medium))
+                    Text(mirroredWindow?.displayTitle ?? "Waiting for iPhone Selection")
+                        .font(.title3.weight(.semibold))
                         .lineLimit(1)
 
-                    Text(hostModel.windowShapeProbeState.detail)
-                        .font(.system(size: 12))
+                    Text(mirroredWindow?.subtitle ?? "Choose an app from the iPhone to begin mirroring.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                 }
 
                 Spacer()
             }
 
-            if let outputDirectoryURL = hostModel.windowShapeProbeState.outputDirectoryURL {
-                Divider()
-
-                HStack(spacing: 8) {
-                    Text(outputDirectoryURL.path)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    Spacer()
-
-                    Button {
-                        hostModel.revealWindowShapeProbeOutput()
-                    } label: {
-                        Image(systemName: "folder")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Reveal probe output")
-                }
+            GeometryReader { proxy in
+                CapturePreviewView(
+                    image: hostModel.liveFrame,
+                    selectedWindow: mirroredWindow,
+                    availableSize: proxy.size
+                )
             }
+            .frame(minHeight: 360)
+
+            StatusStripView(status: hostModel.streamStatus)
         }
-        .padding(12)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(.rect(cornerRadius: 10))
     }
 
+    private var mirroredWindow: MirrorWindow? {
+        hostModel.streamStatus.isRunning ? hostModel.selectedWindow : nil
+    }
+
+    private var mirroredWindowIcon: NSImage? {
+        mirroredWindow == nil ? nil : hostModel.selectedWindowApplicationIcon
+    }
+}
+
+private struct HostReadinessPanel: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Host Readiness")
+                .font(.system(size: 13, weight: .semibold))
+
+            ReadinessRow(
+                title: hostModel.frameServerStatus.title,
+                detail: hostModel.frameServerStatus.detail,
+                systemImage: serverSymbolName,
+                color: serverColor
+            )
+
+            ReadinessRow(
+                title: clientTitle,
+                detail: clientDetail,
+                systemImage: hostModel.connectedClients.isEmpty ? "iphone.slash" : "iphone.radiowaves.left.and.right",
+                color: hostModel.connectedClients.isEmpty ? .secondary : .green
+            )
+
+            ReadinessRow(
+                title: permissionsOK ? "Permissions OK" : "Permissions Needed",
+                detail: permissionsDetail,
+                systemImage: permissionsOK ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
+                color: permissionsOK ? .green : .orange
+            )
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var permissionsOK: Bool {
+        hostModel.permissions.screenCaptureGranted && hostModel.permissions.accessibilityGranted
+    }
+
+    private var permissionsDetail: String {
+        if permissionsOK {
+            return "Screen recording and input control are available."
+        }
+
+        if !hostModel.permissions.screenCaptureGranted && !hostModel.permissions.accessibilityGranted {
+            return "Screen Recording and Accessibility are needed."
+        }
+
+        return hostModel.permissions.screenCaptureGranted ? "Accessibility is needed for input." : "Screen Recording is needed for mirroring."
+    }
+
+    private var clientTitle: String {
+        let count = hostModel.connectedClients.count
+        return count == 0 ? "No Client Connected" : "\(count) Client\(count == 1 ? "" : "s") Connected"
+    }
+
+    private var clientDetail: String {
+        if hostModel.connectedClients.isEmpty {
+            return "Open Apperture on iPhone to connect."
+        }
+
+        return hostModel.connectedClients.map(\.displayName).joined(separator: ", ")
+    }
+
+    private var serverSymbolName: String {
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return "antenna.radiowaves.left.and.right.slash"
+        case .online:
+            return "antenna.radiowaves.left.and.right"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var serverColor: Color {
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return .secondary
+        case .online:
+            return .green
+        case .failed:
+            return .orange
+        }
+    }
+}
+
+private struct ReadinessRow: View {
+    var title: String
+    var detail: String
+    var systemImage: String
+    var color: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+        }
+    }
+}
+
+private struct ConnectionDetailsView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ReadinessRow(
+                title: hostModel.frameServerStatus.title,
+                detail: hostModel.frameServerStatus.detail,
+                systemImage: symbolName,
+                color: symbolColor
+            )
+
+            if hostModel.connectionHints.isEmpty {
+                Text("No network addresses are available right now.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Addresses")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(hostModel.connectionHints) { hint in
+                        ConnectionHintRow(hint: hint)
+                    }
+                }
+            }
+        }
+    }
+
     private var symbolName: String {
-        switch hostModel.windowShapeProbeState {
-        case .idle:
-            return "camera.metering.matrix"
-        case .running:
-            return "camera.metering.center.weighted"
-        case .completed:
-            return "checkmark.circle.fill"
+        switch hostModel.frameServerStatus {
+        case .offline:
+            return "antenna.radiowaves.left.and.right.slash"
+        case .online:
+            return "antenna.radiowaves.left.and.right"
         case .failed:
             return "exclamationmark.triangle.fill"
         }
     }
 
     private var symbolColor: Color {
-        switch hostModel.windowShapeProbeState {
-        case .idle:
+        switch hostModel.frameServerStatus {
+        case .offline:
             return .secondary
-        case .running:
-            return .blue
-        case .completed:
+        case .online:
             return .green
         case .failed:
             return .orange
+        }
+    }
+}
+
+struct PairingFlowView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        PairingFlowContentView(pairingManager: hostModel.pairingManager)
+            .environmentObject(hostModel)
+    }
+}
+
+private struct PairingFlowContentView: View {
+    @EnvironmentObject private var hostModel: HostModel
+    @ObservedObject var pairingManager: MacPairingManager
+
+    var body: some View {
+        VStack(spacing: 0) {
+            pairingHeader
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    pairingCard
+                    trustedDevicesCard
+
+                    if !pairingManager.auditRecords.isEmpty {
+                        recentActivityCard
+                    }
+                }
+                .padding(24)
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .task {
+            hostModel.refreshAll()
+        }
+    }
+
+    private var pairingHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Pair iPhone")
+                .font(.title2.weight(.semibold))
+
+            Text("Create a one-time code, approve the phone, and keep trusted devices here.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+
+    @ViewBuilder
+    private var pairingCard: some View {
+        if let image = pairingManager.qrImage(), let offer = pairingManager.activeOffer {
+            HStack(alignment: .top, spacing: 24) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 184, height: 184)
+                    .padding(8)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(.rect(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Scan This Code")
+                            .font(.headline)
+
+                        Text("Expires \(offer.expiresAt, style: .timer)")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let statusMessage = pairingManager.pairingStatusMessage {
+                        Label(statusMessage, systemImage: "info.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                    }
+
+                    if let pendingRequest = pairingManager.pendingRequest {
+                        PendingPairingRequestView(request: pendingRequest)
+                            .environmentObject(hostModel)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Button("Cancel Pairing") {
+                        hostModel.cancelPhonePairing()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(16)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(.rect(cornerRadius: 10))
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Ready to Pair", systemImage: "qrcode.viewfinder")
+                    .font(.headline)
+
+                Text("Generate a fresh QR code and scan it from the iPhone app.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                if let statusMessage = pairingManager.pairingStatusMessage {
+                    Text(statusMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    hostModel.beginPhonePairing()
+                } label: {
+                    Label("Create Pairing Code", systemImage: "qrcode")
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(.rect(cornerRadius: 10))
+        }
+    }
+
+    private var trustedDevicesCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Trusted Devices")
+                    .font(.headline)
+
+                Spacer()
+
+                Text("\(activeDevices.count)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if activeDevices.isEmpty {
+                EmptyStateRow(
+                    systemImage: "iphone.slash",
+                    title: "No phones paired",
+                    detail: "Paired iPhones will appear here."
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(activeDevices) { device in
+                        PairedDeviceRow(device: device)
+                            .environmentObject(hostModel)
+
+                        if device.id != activeDevices.last?.id {
+                            Divider()
+                                .padding(.leading, 32)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var recentActivityCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recent Sessions")
+                    .font(.system(size: 13, weight: .medium))
+                Text("\(pairingManager.auditRecords.count) session\(pairingManager.auditRecords.count == 1 ? "" : "s") in the last \(PairingConstants.auditRetentionDays) days.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var activeDevices: [PairedDevice] {
+        pairingManager.pairedDevices.filter { !$0.isRevoked }
+    }
+}
+
+private struct PendingPairingRequestView: View {
+    @EnvironmentObject private var hostModel: HostModel
+    var request: PendingPairingRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(request.request.phoneIdentity.displayName) wants to pair.")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(request.remoteEndpoint ?? "Endpoint unavailable")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: request.request.phoneIdentity.symbolName)
+            }
+
+            HStack(spacing: 8) {
+                Button("Reject") {
+                    hostModel.rejectPendingPairing()
+                }
+
+                Button("Allow") {
+                    hostModel.approvePendingPairing()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(.rect(cornerRadius: 8))
+    }
+}
+
+private struct PairedDeviceRow: View {
+    @EnvironmentObject private var hostModel: HostModel
+    var device: PairedDevice
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: device.symbolName)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                Text(deviceDetail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                hostModel.revokePairing(device)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Revoke \(device.displayName)")
+        }
+        .padding(.vertical, 10)
+    }
+
+    private var deviceDetail: String {
+        if let lastSeenAt = device.lastSeenAt {
+            return "Last seen \(lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+
+        return "Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))"
+    }
+}
+
+struct DeviceSessionsView: View {
+    @EnvironmentObject private var hostModel: HostModel
+
+    var body: some View {
+        DeviceSessionsContentView(pairingManager: hostModel.pairingManager)
+    }
+}
+
+private struct DeviceSessionsContentView: View {
+    @ObservedObject var pairingManager: MacPairingManager
+
+    var body: some View {
+        VStack(spacing: 0) {
+            sessionsHeader
+
+            Divider()
+
+            if pairingManager.auditRecords.isEmpty {
+                EmptyStateRow(
+                    systemImage: "clock.badge.questionmark",
+                    title: "No sessions yet",
+                    detail: "Connected iPhone sessions will appear here."
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(pairingManager.auditRecords) { record in
+                    SessionRecordRow(record: record)
+                }
+                .listStyle(.inset)
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var sessionsHeader: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Device Sessions")
+                    .font(.title2.weight(.semibold))
+
+                Text("Recent iPhone connections, selected windows, and disconnect details.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text("\(pairingManager.auditRecords.count)")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(.capsule)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+}
+
+private struct SessionRecordRow: View {
+    var record: SessionAuditRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: record.isActive ? "iphone.radiowaves.left.and.right" : record.networkKind.symbolName)
+                    .foregroundStyle(record.isActive ? .green : .secondary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(record.pairedDeviceName)
+                            .font(.system(size: 13, weight: .semibold))
+
+                        Text(record.statusTitle)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(record.isActive ? .green : .secondary)
+                    }
+
+                    Text(record.startedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(record.durationText)
+                        .font(.system(size: 13, weight: .medium))
+                    Text(record.networkKind.title)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let latestSelection = record.latestWindowSelection {
+                Label {
+                    Text("\(latestSelection.appName) - \(latestSelection.windowTitle)")
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: "macwindow")
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            if !record.selectedWindows.isEmpty {
+                DisclosureGroup("Selected Windows") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(record.selectedWindows, id: \.selectedAt) { selection in
+                            HStack(spacing: 8) {
+                                Text(selection.selectedAt.formatted(date: .omitted, time: .shortened))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 56, alignment: .leading)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(selection.appName)
+                                        .font(.system(size: 12, weight: .medium))
+                                    Text(selection.windowTitle)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.system(size: 12, weight: .medium))
+            }
+
+            if let remoteAddress = record.remoteAddress {
+                SessionDetailLine(title: "Remote", value: remoteAddress)
+            }
+
+            if let disconnectReason = record.disconnectReason {
+                SessionDetailLine(title: "Ended", value: disconnectReason)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct SessionDetailLine: View {
+    var title: String
+    var value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 56, alignment: .leading)
+
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
+private struct EmptyStateRow: View {
+    var systemImage: String
+    var title: String
+    var detail: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+
+            Text(detail)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(24)
+    }
+}
+
+private extension SessionAuditRecord {
+    var isActive: Bool {
+        endedAt == nil
+    }
+
+    var statusTitle: String {
+        isActive ? "Active" : "Ended"
+    }
+
+    var latestWindowSelection: SessionWindowSelection? {
+        selectedWindows.max { lhs, rhs in
+            lhs.selectedAt < rhs.selectedAt
+        }
+    }
+
+    var durationText: String {
+        let endDate = endedAt ?? Date()
+        let interval = max(0, endDate.timeIntervalSince(startedAt))
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = interval >= 3600 ? [.hour, .minute] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: interval) ?? "0s"
+    }
+}
+
+private extension SessionAuditRecord.NetworkKind {
+    var title: String {
+        switch self {
+        case .localNetwork:
+            return "Local Network"
+        case .tailnet:
+            return "Tailnet"
+        case .privateNetwork:
+            return "Private Network"
+        case .loopback:
+            return "Loopback"
+        case .unknown:
+            return "Unknown Network"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .localNetwork:
+            return "wifi"
+        case .tailnet:
+            return "point.3.connected.trianglepath.dotted"
+        case .privateNetwork:
+            return "network"
+        case .loopback:
+            return "desktopcomputer"
+        case .unknown:
+            return "questionmark.circle"
         }
     }
 }
@@ -298,220 +1067,6 @@ private struct PermissionSummaryView: View {
     }
 }
 
-private struct FrameServerSummaryView: View {
-    @EnvironmentObject private var hostModel: HostModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Image(systemName: symbolName)
-                    .foregroundStyle(symbolColor)
-                    .frame(width: 20)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(hostModel.frameServerStatus.title)
-                        .font(.system(size: 13, weight: .medium))
-                    Text(hostModel.frameServerStatus.detail)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer()
-            }
-
-            if shouldShowConnectionHints {
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Connect from iPhone")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-
-                    if hostModel.connectionHints.isEmpty {
-                        Text("No network address detected.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(hostModel.connectionHints) { hint in
-                            ConnectionHintRow(hint: hint)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            Button {
-                hostModel.beginPhonePairing()
-            } label: {
-                Label("Pair Phone", systemImage: "qrcode")
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(.rect(cornerRadius: 10))
-    }
-
-    private var symbolName: String {
-        switch hostModel.frameServerStatus {
-        case .offline:
-            return "antenna.radiowaves.left.and.right.slash"
-        case .online:
-            return "antenna.radiowaves.left.and.right"
-        case .failed:
-            return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var symbolColor: Color {
-        switch hostModel.frameServerStatus {
-        case .offline:
-            return .secondary
-        case .online:
-            return .green
-        case .failed:
-            return .orange
-        }
-    }
-
-    private var shouldShowConnectionHints: Bool {
-        switch hostModel.frameServerStatus {
-        case .online:
-            return true
-        case .offline, .failed:
-            return false
-        }
-    }
-}
-
-private struct PairingSummaryView: View {
-    @EnvironmentObject private var hostModel: HostModel
-    @ObservedObject var pairingManager: MacPairingManager
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Image(systemName: "lock.shield")
-                    .foregroundColor(pairingManager.pairedDevices.isEmpty ? .secondary : .green)
-                    .frame(width: 20)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Paired Devices")
-                        .font(.system(size: 13, weight: .medium))
-                    Text(summaryText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer()
-            }
-
-            if let pairingStatusMessage = pairingManager.pairingStatusMessage {
-                Label(pairingStatusMessage, systemImage: "info.circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-            }
-
-            if let image = pairingManager.qrImage(), let offer = pairingManager.activeOffer {
-                Divider()
-
-                VStack(spacing: 12) {
-                    Image(nsImage: image)
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 180, height: 180)
-                        .padding(8)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .clipShape(.rect(cornerRadius: 8))
-
-                    Text("Scan from iPhone. Expires \(offer.expiresAt, style: .timer).")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-
-                    if let pendingRequest = pairingManager.pendingRequest {
-                        VStack(spacing: 8) {
-                            Label(
-                                "\(pendingRequest.request.phoneIdentity.displayName) wants to pair.",
-                                systemImage: pendingRequest.request.phoneIdentity.symbolName
-                            )
-                            .font(.system(size: 12, weight: .medium))
-
-                            HStack(spacing: 8) {
-                                Button("Reject") {
-                                    hostModel.rejectPendingPairing()
-                                }
-                                Button("Allow") {
-                                    hostModel.approvePendingPairing()
-                                }
-                                .keyboardShortcut(.defaultAction)
-                            }
-                        }
-                    }
-
-                    Button("Cancel Pairing") {
-                        hostModel.cancelPhonePairing()
-                    }
-                    .buttonStyle(.link)
-                }
-                .frame(maxWidth: .infinity)
-            }
-
-            if !pairingManager.pairedDevices.isEmpty {
-                Divider()
-
-                ForEach(pairingManager.pairedDevices.filter { !$0.isRevoked }) { device in
-                    HStack(spacing: 8) {
-                        Image(systemName: device.symbolName)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(device.displayName)
-                                .font(.system(size: 12, weight: .medium))
-                            Text(device.lastSeenAt.map { "Last seen \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Not connected yet")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Button {
-                            hostModel.revokePairing(device)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Revoke \(device.displayName)")
-                    }
-                }
-            }
-
-            if !pairingManager.auditRecords.isEmpty {
-                Divider()
-                Text("\(pairingManager.auditRecords.count) session\(pairingManager.auditRecords.count == 1 ? "" : "s") in the last 30 days.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(.rect(cornerRadius: 10))
-    }
-
-    private var summaryText: String {
-        let activeCount = pairingManager.pairedDevices.filter { !$0.isRevoked }.count
-        if activeCount == 0 {
-            return "No phones paired yet."
-        }
-        return "\(activeCount) trusted phone\(activeCount == 1 ? "" : "s")."
-    }
-}
-
 private struct ConnectionHintRow: View {
     @EnvironmentObject private var hostModel: HostModel
     var hint: HostConnectionHint
@@ -565,163 +1120,6 @@ private struct PermissionRow: View {
             Button(actionTitle, action: action)
                 .buttonStyle(.link)
         }
-    }
-}
-
-private struct ApplicationWindowGroup: Identifiable {
-    var id: String
-    var name: String
-    var iconPNGData: Data?
-    var windows: [MirrorWindow]
-
-    var containsSimulator: Bool {
-        windows.contains(where: \.isLikelySimulator)
-    }
-
-    static func make(from windows: [MirrorWindow]) -> [ApplicationWindowGroup] {
-        Dictionary(grouping: windows) { $0.applicationGroupID }
-            .values
-            .map { windows in
-                let sortedWindows = windows.sorted { lhs, rhs in
-                    lhs.windowListTitle.localizedCaseInsensitiveCompare(rhs.windowListTitle) == .orderedAscending
-                }
-                let firstWindow = sortedWindows[0]
-                return ApplicationWindowGroup(
-                    id: firstWindow.applicationGroupID,
-                    name: firstWindow.applicationName,
-                    iconPNGData: sortedWindows.first(where: { $0.applicationIconPNGData != nil })?.applicationIconPNGData,
-                    windows: sortedWindows
-                )
-            }
-            .sorted { lhs, rhs in
-                if lhs.containsSimulator != rhs.containsSimulator {
-                    return lhs.containsSimulator
-                }
-
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-    }
-}
-
-private struct ApplicationGroupHeader: View {
-    var group: ApplicationWindowGroup
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ApplicationIconView(
-                iconPNGData: group.iconPNGData,
-                fallbackSystemName: group.containsSimulator ? "iphone.gen3" : "app.fill",
-                size: 18
-            )
-
-            Text(group.name)
-                .font(.system(size: 11, weight: .semibold))
-
-            Spacer()
-
-            if group.windows.count > 1 {
-                Text("\(group.windows.count)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .textCase(nil)
-    }
-}
-
-private struct ApplicationIconView: View {
-    var iconPNGData: Data?
-    var fallbackSystemName: String
-    var size: CGFloat
-
-    var body: some View {
-        Group {
-            if let nsImage {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                Image(systemName: fallbackSystemName)
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: size, height: size)
-    }
-
-    private var nsImage: NSImage? {
-        guard let iconPNGData else { return nil }
-        return NSImage(data: iconPNGData)
-    }
-}
-
-private struct WindowRow: View {
-    var window: MirrorWindow
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: window.targetKind.symbolName)
-                .foregroundStyle(window.isLikelySimulator ? .blue : .secondary)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(window.windowListTitle)
-                    .lineLimit(1)
-
-                Text(window.windowListSubtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct HostToolbarView: View {
-    @EnvironmentObject private var hostModel: HostModel
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(hostModel.selectedWindow?.displayTitle ?? "No Window Selected")
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-
-                Text(hostModel.selectedWindow?.subtitle ?? "Waiting for target selection.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Button {
-                hostModel.runWindowShapeProbe()
-            } label: {
-                Label("Probe Shape", systemImage: "camera.metering.matrix")
-            }
-            .disabled(hostModel.selectedWindow == nil || hostModel.windowShapeProbeState.isRunning)
-            .help("Capture window shape variants")
-
-            Button {
-                if hostModel.streamStatus.isRunning {
-                    hostModel.stopLiveView()
-                } else {
-                    hostModel.startLiveView()
-                }
-            } label: {
-                Label(
-                    hostModel.streamStatus.isRunning ? "Stop Live View" : "Start Live View",
-                    systemImage: hostModel.streamStatus.isRunning ? "stop.circle" : "play.circle"
-                )
-            }
-            .disabled(hostModel.selectedWindow == nil)
-            .keyboardShortcut(.return, modifiers: .command)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
     }
 }
 

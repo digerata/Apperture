@@ -90,7 +90,7 @@ final class RemoteFrameStreamServer {
                 parameters.includePeerToPeer = true
 
                 guard let port = NWEndpoint.Port(rawValue: RemoteFrameStreamConfiguration.tcpPort) else {
-                    statusHandler(.failed("Invalid stream port."))
+                statusHandler(.failed("Invalid stream port."))
                     return
                 }
 
@@ -679,7 +679,19 @@ final class RemoteFrameStreamServer {
     }
 
     private func publishStatus() {
-        statusHandler?(.online(port: RemoteFrameStreamConfiguration.tcpPort, clientCount: readyConnectionIDs.count))
+        let clients = readyConnectionIDs.compactMap { id -> ConnectedFrameClient? in
+            guard let device = authenticatedDevices[id] else { return nil }
+            return ConnectedFrameClient(
+                id: id,
+                displayName: device.displayName,
+                symbolName: device.symbolName
+            )
+        }
+        .sorted { lhs, rhs in
+            lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+
+        statusHandler?(.online(port: RemoteFrameStreamConfiguration.tcpPort, clients: clients))
     }
 
     private func remoteEndpointDescription(for id: UUID) -> String? {
@@ -1204,17 +1216,36 @@ private extension CGImage {
     }
 }
 
+struct ConnectedFrameClient: Identifiable, Equatable {
+    var id: UUID
+    var displayName: String
+    var symbolName: String
+}
+
 enum FrameServerStatus: Equatable {
     case offline
-    case online(port: UInt16, clientCount: Int)
+    case online(port: UInt16, clients: [ConnectedFrameClient])
     case failed(String)
+
+    var connectedClients: [ConnectedFrameClient] {
+        switch self {
+        case .online(_, let clients):
+            return clients
+        case .offline, .failed:
+            return []
+        }
+    }
+
+    var clientCount: Int {
+        connectedClients.count
+    }
 
     var title: String {
         switch self {
         case .offline:
             return "Remote Off"
-        case .online(_, let clientCount):
-            return clientCount == 0 ? "Remote Ready" : "Remote Connected"
+        case .online(_, let clients):
+            return clients.isEmpty ? "Remote Ready" : "Remote Connected"
         case .failed:
             return "Remote Failed"
         }
@@ -1224,10 +1255,10 @@ enum FrameServerStatus: Equatable {
         switch self {
         case .offline:
             return "Bonjour frame service is not running."
-        case .online(let port, let clientCount):
-            return clientCount == 0
+        case .online(let port, let clients):
+            return clients.isEmpty
                 ? "Listening on port \(port). Use Connect to Mac on cellular or Tailscale."
-                : "\(clientCount) iPhone connection\(clientCount == 1 ? "" : "s") on port \(port)."
+                : "\(clients.count) iPhone connection\(clients.count == 1 ? "" : "s") on port \(port)."
         case .failed(let message):
             return message
         }

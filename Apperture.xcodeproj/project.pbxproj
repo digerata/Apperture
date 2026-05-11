@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 54;
+	objectVersion = 56;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -52,9 +52,9 @@
 
 /* Begin PBXFileReference section */
 		088A37067ABFA150776AE1CA /* PairingStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingStores.swift; sourceTree = "<group>"; };
-		0B6711FED776A49487016D25 /* AppertureMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppertureMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0B6711FED776A49487016D25 /* Apperture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Apperture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		118635A423B2D5C671F2B700 /* MacHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHostView.swift; sourceTree = "<group>"; };
-		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AppertureiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; name = AppertureiOS.app; path = Apperture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorLayoutMode.swift; sourceTree = "<group>"; };
 		284CE10370F0CCF3269B4FF9 /* iOSPairingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSPairingManager.swift; sourceTree = "<group>"; };
 		29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWindowListMessage.swift; sourceTree = "<group>"; };
@@ -69,8 +69,8 @@
 		796A68773C4B7A542404F86C /* WindowShapeProbeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowShapeProbeService.swift; sourceTree = "<group>"; };
 		79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlMessage.swift; sourceTree = "<group>"; };
 		7A7DC6BCB06273CCD7B1C452 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		8120F7B2250A4168A3E9203C /* AppertureiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppertureiOS.entitlements; sourceTree = "<group>"; };
 		7ACF0CBF381379D651271968 /* RemoteVideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoEncoder.swift; sourceTree = "<group>"; };
+		8120F7B2250A4168A3E9203C /* AppertureiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppertureiOS.entitlements; sourceTree = "<group>"; };
 		8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorSessionSnapshot.swift; sourceTree = "<group>"; };
 		8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamConfiguration.swift; sourceTree = "<group>"; };
 		9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamClient.swift; sourceTree = "<group>"; };
@@ -162,7 +162,7 @@
 			isa = PBXGroup;
 			children = (
 				12FEF13A3B652BE2B76966DC /* AppertureiOS.app */,
-				0B6711FED776A49487016D25 /* AppertureMac.app */,
+				0B6711FED776A49487016D25 /* Apperture.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -183,7 +183,7 @@
 			);
 			name = AppertureMac;
 			productName = AppertureMac;
-			productReference = 0B6711FED776A49487016D25 /* AppertureMac.app */;
+			productReference = 0B6711FED776A49487016D25 /* Apperture.app */;
 			productType = "com.apple.product-type.application";
 		};
 		F448AFB6AB53675783F36AD5 /* AppertureiOS */ = {
@@ -398,6 +398,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = VY76D5S364;
@@ -505,6 +506,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = VY76D5S364;

@@ -15,7 +15,6 @@ final class HostModel: ObservableObject {
         eventDirectoryPath: AgentEventBridgeService.defaultEventDirectoryURL.path
     )
     @Published private(set) var lastRefreshDate: Date?
-    @Published private(set) var windowShapeProbeState: WindowShapeProbeState = .idle
     @Published private(set) var pairingManager = MacPairingManager()
 
     private let discoveryService = WindowDiscoveryService()
@@ -24,7 +23,6 @@ final class HostModel: ObservableObject {
     private let frameServer = RemoteFrameStreamServer()
     private let inputInjectionService = RemoteInputInjectionService()
     private let wallpaperService = DesktopWallpaperService()
-    private let windowShapeProbeService = WindowShapeProbeService()
     private let networkAddressService = HostNetworkAddressService()
     private let liveFramePreviewScheduler = LiveFramePreviewScheduler()
     private let remoteWindowListRefreshCoalescingInterval: TimeInterval = 1
@@ -32,7 +30,9 @@ final class HostModel: ObservableObject {
     private var activeAuditSessionIDs: [UUID: String] = [:]
     private var pendingPairingConnectionID: UUID?
 
-    init() {
+    init(startsServices: Bool = true) {
+        guard startsServices else { return }
+
         frameServer.start(
             statusHandler: { [weak self] status in
                 Task { @MainActor in
@@ -88,6 +88,15 @@ final class HostModel: ObservableObject {
 
     var selectedWindow: MirrorWindow? {
         windows.first { $0.id == selectedWindowID }
+    }
+
+    var connectedClients: [ConnectedFrameClient] {
+        frameServerStatus.connectedClients
+    }
+
+    var selectedWindowApplicationIcon: NSImage? {
+        guard let selectedWindow else { return nil }
+        return NSRunningApplication(processIdentifier: selectedWindow.processID)?.icon
     }
 
     func refreshAll() {
@@ -227,30 +236,6 @@ final class HostModel: ObservableObject {
             frameServer.resetVideoStream()
             streamStatus = .idle
         }
-    }
-
-    func runWindowShapeProbe() {
-        guard !windowShapeProbeState.isRunning else { return }
-        guard let window = selectedWindow else {
-            windowShapeProbeState = .failed("Select a window before running the shape probe.")
-            return
-        }
-
-        windowShapeProbeState = .running(window.displayTitle)
-
-        Task {
-            do {
-                let result = try await windowShapeProbeService.run(for: window)
-                windowShapeProbeState = .completed(result)
-            } catch {
-                windowShapeProbeState = .failed(error.localizedDescription)
-            }
-        }
-    }
-
-    func revealWindowShapeProbeOutput() {
-        guard let outputDirectoryURL = windowShapeProbeState.outputDirectoryURL else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([outputDirectoryURL])
     }
 
     func beginPhonePairing() {
