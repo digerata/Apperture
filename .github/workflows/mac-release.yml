@@ -1,0 +1,90 @@
+name: Mac Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "mac-v*"
+      - "v*"
+
+concurrency:
+  group: mac-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-notarize:
+    name: Build, Sign, Notarize
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+      NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+      P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CERTIFICATE_BASE64:-}" ]]; then
+            echo "DEVELOPER_ID_APPLICATION_CERT_BASE64 is not set" >&2
+            exit 1
+          fi
+          if [[ -z "${P12_PASSWORD:-}" ]]; then
+            echo "DEVELOPER_ID_APPLICATION_CERT_PASSWORD is not set" >&2
+            exit 1
+          fi
+          if [[ -z "${KEYCHAIN_PASSWORD:-}" ]]; then
+            echo "RELEASE_KEYCHAIN_PASSWORD is not set" >&2
+            exit 1
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/apperture-release.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id-application.p12"
+
+          echo "$CERTIFICATE_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/productbuild
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+      - name: Build and notarize Mac app
+        run: scripts/notarize-mac-release.sh
+
+      - name: Upload notarized DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Apperture-mac-notarized
+          path: build/mac-release/artifacts/Apperture.dmg
+          if-no-files-found: error
+
+      - name: Attach DMG to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/mac-release/artifacts/Apperture.dmg

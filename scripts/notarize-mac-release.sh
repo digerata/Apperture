@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_PATH="${PROJECT_PATH:-$ROOT_DIR/Apperture.xcodeproj}"
+SCHEME="${SCHEME:-AppertureMac}"
+CONFIGURATION="${CONFIGURATION:-Release}"
+TEAM_ID="${APPLE_TEAM_ID:-VY76D5S364}"
+PRODUCT_NAME="${PRODUCT_NAME:-Apperture}"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.landmk1.apperture}"
+BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/build/mac-release}"
+ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
+EXPORT_PATH="$BUILD_ROOT/export"
+ARTIFACTS_PATH="$BUILD_ROOT/artifacts"
+EXPORT_OPTIONS_PATH="$BUILD_ROOT/ExportOptions.plist"
+APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
+NOTARY_UPLOAD_ZIP="$ARTIFACTS_PATH/$PRODUCT_NAME-notary-upload.zip"
+DMG_PATH="$ARTIFACTS_PATH/$PRODUCT_NAME.dmg"
+
+require_tool() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: required tool '$1' is not available" >&2
+    exit 1
+  fi
+}
+
+submit_for_notarization() {
+  local path="$1"
+
+  if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+    echo "Submitting $(basename "$path") for notarization..."
+    xcrun notarytool submit "$path" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait
+    return
+  fi
+
+  local apple_id="${NOTARY_APPLE_ID:-${APPLE_ID:-}}"
+  local password="${NOTARY_PASSWORD:-${APPLE_APP_SPECIFIC_PASSWORD:-}}"
+
+  if [[ -z "$apple_id" || -z "$password" || -z "$TEAM_ID" ]]; then
+    cat >&2 <<EOF
+error: missing notarization credentials.
+Provide either NOTARY_KEYCHAIN_PROFILE, or NOTARY_APPLE_ID/APPLE_ID,
+NOTARY_PASSWORD/APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID.
+EOF
+    exit 1
+  fi
+
+  echo "Submitting $(basename "$path") for notarization..."
+  xcrun notarytool submit "$path" \
+    --apple-id "$apple_id" \
+    --password "$password" \
+    --team-id "$TEAM_ID" \
+    --wait
+}
+
+require_tool xcodebuild
+require_tool xcrun
+require_tool ditto
+require_tool hdiutil
+
+rm -rf "$BUILD_ROOT"
+mkdir -p "$EXPORT_PATH" "$ARTIFACTS_PATH"
+
+cat > "$EXPORT_OPTIONS_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>developer-id</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Developer ID Application</string>
+	<key>teamID</key>
+	<string>$TEAM_ID</string>
+</dict>
+</plist>
+EOF
+
+echo "Archiving $SCHEME..."
+xcodebuild archive \
+  -project "$PROJECT_PATH" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIGURATION" \
+  -destination "generic/platform=macOS" \
+  -archivePath "$ARCHIVE_PATH" \
+  DEVELOPMENT_TEAM="$TEAM_ID" \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="Developer ID Application" \
+  ENABLE_HARDENED_RUNTIME=YES \
+  PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID"
+
+echo "Exporting Developer ID app..."
+xcodebuild -exportArchive \
+  -archivePath "$ARCHIVE_PATH" \
+  -exportPath "$EXPORT_PATH" \
+  -exportOptionsPlist "$EXPORT_OPTIONS_PATH"
+
+if [[ ! -d "$APP_PATH" ]]; then
+  echo "error: expected app at $APP_PATH" >&2
+  exit 1
+fi
+
+echo "Verifying code signature..."
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+spctl --assess --type execute --verbose=4 "$APP_PATH" || true
+
+if [[ "${SKIP_NOTARIZATION:-0}" == "1" ]]; then
+  echo "SKIP_NOTARIZATION=1, skipping notarytool and stapling."
+else
+  echo "Creating app ZIP for notarization..."
+  ditto -c -k --keepParent "$APP_PATH" "$NOTARY_UPLOAD_ZIP"
+  submit_for_notarization "$NOTARY_UPLOAD_ZIP"
+
+  echo "Stapling notarization ticket to app..."
+  xcrun stapler staple "$APP_PATH"
+  xcrun stapler validate "$APP_PATH"
+fi
+
+echo "Creating disk image..."
+rm -f "$DMG_PATH"
+hdiutil create \
+  -volname "$PRODUCT_NAME" \
+  -srcfolder "$APP_PATH" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH"
+
+if [[ "${SKIP_NOTARIZATION:-0}" != "1" ]]; then
+  submit_for_notarization "$DMG_PATH"
+  echo "Stapling notarization ticket to disk image..."
+  xcrun stapler staple "$DMG_PATH"
+  xcrun stapler validate "$DMG_PATH"
+fi
+
+echo "Release artifact:"
+echo "$DMG_PATH"
