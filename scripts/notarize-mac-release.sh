@@ -9,14 +9,19 @@ TEAM_ID="${APPLE_TEAM_ID:-VY76D5S364}"
 PRODUCT_NAME="${PRODUCT_NAME:-Apperture}"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.landmk1.apperture}"
 DEVELOPER_ID_IDENTITY="${DEVELOPER_ID_IDENTITY:-Developer ID Application}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://example.com/apperture/appcast.xml}"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
+SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX:-${GITHUB_REPOSITORY:+https://github.com/$GITHUB_REPOSITORY/releases/download/${GITHUB_REF_NAME:-latest}}}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/build/mac-release}"
 ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_ROOT/export"
 ARTIFACTS_PATH="$BUILD_ROOT/artifacts"
+DMG_STAGING_PATH="$BUILD_ROOT/dmg-staging"
+SPARKLE_UPDATES_PATH="$ARTIFACTS_PATH/sparkle"
 EXPORT_OPTIONS_PATH="$BUILD_ROOT/ExportOptions.plist"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
 NOTARY_UPLOAD_ZIP="$ARTIFACTS_PATH/$PRODUCT_NAME-notary-upload.zip"
-DMG_PATH="$ARTIFACTS_PATH/$PRODUCT_NAME.dmg"
+DMG_PATH=""
 
 require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -54,6 +59,24 @@ EOF
     --wait
 }
 
+find_generate_appcast() {
+  if [[ -n "${SPARKLE_GENERATE_APPCAST:-}" && -x "$SPARKLE_GENERATE_APPCAST" ]]; then
+    echo "$SPARKLE_GENERATE_APPCAST"
+    return 0
+  fi
+
+  local search_root
+  for search_root in "$HOME/Library/Developer/Xcode/DerivedData" "$ROOT_DIR/DerivedData"; do
+    [[ -d "$search_root" ]] || continue
+    find "$search_root" \
+      -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast" \
+      -type f \
+      -perm -111 \
+      -print \
+      2>/dev/null | head -n 1
+  done | head -n 1
+}
+
 require_tool xcodebuild
 require_tool xcrun
 require_tool ditto
@@ -72,7 +95,7 @@ EOF
 fi
 
 rm -rf "$BUILD_ROOT"
-mkdir -p "$EXPORT_PATH" "$ARTIFACTS_PATH"
+mkdir -p "$EXPORT_PATH" "$ARTIFACTS_PATH" "$DMG_STAGING_PATH"
 
 cat > "$EXPORT_OPTIONS_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -102,7 +125,9 @@ xcodebuild archive \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$DEVELOPER_ID_IDENTITY" \
   ENABLE_HARDENED_RUNTIME=YES \
-  PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID"
+  PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID" \
+  SPARKLE_FEED_URL="$SPARKLE_FEED_URL" \
+  SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
 
 echo "Exporting Developer ID app..."
 xcodebuild -exportArchive \
@@ -119,6 +144,11 @@ echo "Verifying code signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 spctl --assess --type execute --verbose=4 "$APP_PATH" || true
 
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+DMG_BASENAME="${PRODUCT_NAME}-${APP_VERSION}"
+DMG_PATH="$ARTIFACTS_PATH/$DMG_BASENAME.dmg"
+
 if [[ "${SKIP_NOTARIZATION:-0}" == "1" ]]; then
   echo "SKIP_NOTARIZATION=1, skipping notarytool and stapling."
 else
@@ -133,9 +163,13 @@ fi
 
 echo "Creating disk image..."
 rm -f "$DMG_PATH"
+rm -rf "$DMG_STAGING_PATH"
+mkdir -p "$DMG_STAGING_PATH"
+ditto "$APP_PATH" "$DMG_STAGING_PATH/$PRODUCT_NAME.app"
+ln -s /Applications "$DMG_STAGING_PATH/Applications"
 hdiutil create \
   -volname "$PRODUCT_NAME" \
-  -srcfolder "$APP_PATH" \
+  -srcfolder "$DMG_STAGING_PATH" \
   -ov \
   -format UDZO \
   "$DMG_PATH"
@@ -151,5 +185,50 @@ if [[ "${SKIP_NOTARIZATION:-0}" != "1" ]]; then
   xcrun stapler validate "$DMG_PATH"
 fi
 
+echo "Writing SHA-256 checksum..."
+shasum -a 256 "$DMG_PATH" | tee "$DMG_PATH.sha256"
+
+if [[ -n "${SPARKLE_PRIVATE_ED_KEY:-}" ]]; then
+  if [[ -z "$SPARKLE_PUBLIC_ED_KEY" || "$SPARKLE_FEED_URL" == *"example.com"* ]]; then
+    cat >&2 <<EOF
+error: SPARKLE_PRIVATE_ED_KEY is set, but Sparkle is not fully configured.
+Set SPARKLE_PUBLIC_ED_KEY and SPARKLE_FEED_URL before generating an appcast.
+EOF
+    exit 1
+  fi
+
+  echo "Generating Sparkle appcast..."
+  GENERATE_APPCAST="$(find_generate_appcast)"
+  if [[ -z "$GENERATE_APPCAST" ]]; then
+    echo "error: Sparkle generate_appcast tool was not found in DerivedData." >&2
+    exit 1
+  fi
+
+  rm -rf "$SPARKLE_UPDATES_PATH"
+  mkdir -p "$SPARKLE_UPDATES_PATH"
+  cp "$DMG_PATH" "$SPARKLE_UPDATES_PATH/"
+
+  SPARKLE_PRIVATE_KEY_FILE="$BUILD_ROOT/sparkle_ed_private_key"
+  printf "%s" "$SPARKLE_PRIVATE_ED_KEY" > "$SPARKLE_PRIVATE_KEY_FILE"
+  chmod 600 "$SPARKLE_PRIVATE_KEY_FILE"
+
+  if [[ -n "$SPARKLE_DOWNLOAD_URL_PREFIX" ]]; then
+    "$GENERATE_APPCAST" \
+      --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" \
+      --download-url-prefix "$SPARKLE_DOWNLOAD_URL_PREFIX" \
+      "$SPARKLE_UPDATES_PATH"
+  else
+    "$GENERATE_APPCAST" \
+      --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" \
+      "$SPARKLE_UPDATES_PATH"
+  fi
+else
+  echo "SPARKLE_PRIVATE_ED_KEY is not set; skipping Sparkle appcast generation."
+fi
+
 echo "Release artifact:"
 echo "$DMG_PATH"
+echo "$DMG_PATH.sha256"
+if [[ -f "$SPARKLE_UPDATES_PATH/appcast.xml" ]]; then
+  echo "$SPARKLE_UPDATES_PATH/appcast.xml"
+fi

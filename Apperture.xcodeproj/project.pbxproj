@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -42,6 +42,7 @@
 		DA6A7B27549F8FBE4F4E1795 /* RemoteFrameStreamServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D290053A2250C9371C1A6F37 /* RemoteFrameStreamServer.swift */; };
 		DABCACF858D6651EC0C8E411 /* MirrorSessionSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */; };
 		E00CE58127D97834B26BDEB3 /* RemoteWindowListMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */; };
+		E246B131F12DD309857BD848 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 2AAB0FD4D21BFAF6589D31B5 /* Sparkle */; };
 		EA78FB9F85478EE0DF97B820 /* DeveloperActivityEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39E10B94A9DA1EDC36778199 /* DeveloperActivityEvent.swift */; };
 		EC29B8260AF745E27852E070 /* RemoteFrameStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */; };
 		F2C005D75782C5D523490314 /* MirrorSessionSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */; };
@@ -52,9 +53,9 @@
 
 /* Begin PBXFileReference section */
 		088A37067ABFA150776AE1CA /* PairingStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingStores.swift; sourceTree = "<group>"; };
-		0B6711FED776A49487016D25 /* Apperture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Apperture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0B6711FED776A49487016D25 /* AppertureMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppertureMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		118635A423B2D5C671F2B700 /* MacHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHostView.swift; sourceTree = "<group>"; };
-		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; name = AppertureiOS.app; path = Apperture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AppertureiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorLayoutMode.swift; sourceTree = "<group>"; };
 		284CE10370F0CCF3269B4FF9 /* iOSPairingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSPairingManager.swift; sourceTree = "<group>"; };
 		29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWindowListMessage.swift; sourceTree = "<group>"; };
@@ -65,12 +66,12 @@
 		5E5CFD7DB223BC167215607A /* AppertureMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppertureMacApp.swift; sourceTree = "<group>"; };
 		5F1ED9318D52100E54E845C7 /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
 		7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoMessages.swift; sourceTree = "<group>"; };
+		743091CE9563D0C7277F9515 /* AppertureiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppertureiOS.entitlements; sourceTree = "<group>"; };
 		795A9206A21C46C0BAB65DD0 /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Media.xcassets; sourceTree = "<group>"; };
 		796A68773C4B7A542404F86C /* WindowShapeProbeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowShapeProbeService.swift; sourceTree = "<group>"; };
 		79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlMessage.swift; sourceTree = "<group>"; };
 		7A7DC6BCB06273CCD7B1C452 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7ACF0CBF381379D651271968 /* RemoteVideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoEncoder.swift; sourceTree = "<group>"; };
-		8120F7B2250A4168A3E9203C /* AppertureiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppertureiOS.entitlements; sourceTree = "<group>"; };
 		8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorSessionSnapshot.swift; sourceTree = "<group>"; };
 		8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamConfiguration.swift; sourceTree = "<group>"; };
 		9006E5F23625DD82BAD89AC0 /* RemoteFrameStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFrameStreamClient.swift; sourceTree = "<group>"; };
@@ -89,13 +90,24 @@
 		EFF8E3E2C598A7FE134288EB /* RemoteInputInjectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteInputInjectionService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		83E820E778727CBF017D3D8C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E246B131F12DD309857BD848 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
 		10A5B8C4242E6016A1EC354A /* iOS */ = {
 			isa = PBXGroup;
 			children = (
+				743091CE9563D0C7277F9515 /* AppertureiOS.entitlements */,
 				C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */,
 				B2ACE7CFE2F054F50016FC7B /* Info.plist */,
-				8120F7B2250A4168A3E9203C /* AppertureiOS.entitlements */,
 				284CE10370F0CCF3269B4FF9 /* iOSPairingManager.swift */,
 				CE8B97426ABA7CF9C8CF0E32 /* iPhoneViewerView.swift */,
 				5F1ED9318D52100E54E845C7 /* Media.xcassets */,
@@ -162,7 +174,7 @@
 			isa = PBXGroup;
 			children = (
 				12FEF13A3B652BE2B76966DC /* AppertureiOS.app */,
-				0B6711FED776A49487016D25 /* Apperture.app */,
+				0B6711FED776A49487016D25 /* AppertureMac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -176,14 +188,18 @@
 			buildPhases = (
 				B134AB40A711BCE396205FD8 /* Sources */,
 				F33B0D29D386C55AF8E67EAE /* Resources */,
+				83E820E778727CBF017D3D8C /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = AppertureMac;
+			packageProductDependencies = (
+				2AAB0FD4D21BFAF6589D31B5 /* Sparkle */,
+			);
 			productName = AppertureMac;
-			productReference = 0B6711FED776A49487016D25 /* Apperture.app */;
+			productReference = 0B6711FED776A49487016D25 /* AppertureMac.app */;
 			productType = "com.apple.product-type.application";
 		};
 		F448AFB6AB53675783F36AD5 /* AppertureiOS */ = {
@@ -229,6 +245,9 @@
 				en,
 			);
 			mainGroup = C3C857E9638C2E26E0AB9A01;
+			packageReferences = (
+				AAECA2A31637767D8C8E76FB /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -367,6 +386,8 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SPARKLE_FEED_URL = "https://example.com/apperture/appcast.xml";
+				SPARKLE_PUBLIC_ED_KEY = "";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -398,7 +419,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = VY76D5S364;
@@ -495,6 +515,8 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SPARKLE_FEED_URL = "https://example.com/apperture/appcast.xml";
+				SPARKLE_PUBLIC_ED_KEY = "";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -506,7 +528,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = VY76D5S364;
@@ -554,6 +575,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AAECA2A31637767D8C8E76FB /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.8.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2AAB0FD4D21BFAF6589D31B5 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AAECA2A31637767D8C8E76FB /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5C43EA316E1A26B6D9016CBC /* Project object */;
 }

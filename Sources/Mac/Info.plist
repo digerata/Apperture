@@ -30,5 +30,13 @@
 	<string>Apperture reads your desktop picture so mirrored windows can appear over the same background on your iPhone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Apperture publishes a private local stream for your paired iPhone.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>$(SPARKLE_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
 </dict>
 </plist>

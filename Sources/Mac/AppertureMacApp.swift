@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Sparkle
 
 @main
 struct AppertureMacApp: App {
@@ -80,6 +81,11 @@ private struct HostMenuBarView: View {
         Button("Device Sessions") {
             openWindow(id: "sessions")
         }
+
+        Button("Check for Updates...") {
+            (NSApp.delegate as? AppertureAppDelegate)?.checkForUpdates(nil)
+        }
+        .disabled(!AppertureAppDelegate.sparkleIsConfigured)
 
         Divider()
 
@@ -196,6 +202,20 @@ private struct HostMenuStatusView: View {
 
 final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
     static let focusNotificationName = Notification.Name("com.landmk1.apperture.focusHost")
+    static var sparkleIsConfigured: Bool {
+        guard let feedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              URL(string: feedURL) != nil,
+              !feedURL.contains("example.com"),
+              let publicKey = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
+              !publicKey.isEmpty,
+              !publicKey.hasPrefix("$(") else {
+            return false
+        }
+
+        return true
+    }
+
+    private var updaterController: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DistributedNotificationCenter.default().addObserver(
@@ -204,6 +224,7 @@ final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
             name: Self.focusNotificationName,
             object: nil
         )
+        configureSoftwareUpdates()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -220,6 +241,20 @@ final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.windows.first?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        updaterController?.checkForUpdates(sender)
+    }
+
+    private func configureSoftwareUpdates() {
+        guard Self.sparkleIsConfigured else { return }
+
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
     }
 }
 
