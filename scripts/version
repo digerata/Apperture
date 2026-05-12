@@ -1,0 +1,125 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+
+ROOT = File.expand_path("..", __dir__)
+PROJECT_YML = File.join(ROOT, "project.yml")
+
+TARGETS = {
+  "mac" => "AppertureMac",
+  "ios" => "AppertureiOS"
+}.freeze
+
+def usage!
+  warn <<~USAGE
+    Usage:
+      scripts/version bump-marketing patch|minor|major
+      scripts/version bump-build mac|ios
+      scripts/version show
+  USAGE
+  exit 1
+end
+
+def project_text
+  File.read(PROJECT_YML)
+end
+
+def write_project(text)
+  File.write(PROJECT_YML, text)
+end
+
+def marketing_version(text)
+  match = text.match(/^(\s*)MARKETING_VERSION:\s*([0-9]+)\.([0-9]+)\.([0-9]+)\s*$/)
+  usage! unless match
+
+  match[2..4].map(&:to_i)
+end
+
+def bump_marketing(kind)
+  text = project_text
+  major, minor, patch = marketing_version(text)
+  old = "#{major}.#{minor}.#{patch}"
+
+  case kind
+  when "major"
+    major += 1
+    minor = 0
+    patch = 0
+  when "minor"
+    minor += 1
+    patch = 0
+  when "patch"
+    patch += 1
+  else
+    usage!
+  end
+
+  new_version = "#{major}.#{minor}.#{patch}"
+  text = text.sub(/^(\s*MARKETING_VERSION:\s*)#{Regexp.escape(old)}\s*$/, "\\1#{new_version}")
+  write_project(text)
+  regenerate_project
+  puts "Marketing version: #{old} -> #{new_version}"
+end
+
+def target_block_range(lines, target)
+  start_index = lines.index { |line| line == "  #{target}:\n" }
+  usage! unless start_index
+
+  end_index = lines[(start_index + 1)..].find_index { |line| line.match?(/^  [A-Za-z0-9_]+:\s*$/) }
+  end_index = end_index ? start_index + 1 + end_index : lines.length
+  start_index...end_index
+end
+
+def bump_build(platform)
+  target = TARGETS[platform] || usage!
+  lines = project_text.lines
+  range = target_block_range(lines, target)
+  index = range.find { |i| lines[i].match?(/^(\s*)CURRENT_PROJECT_VERSION:\s*([0-9]+)\s*$/) }
+  abort "error: #{target} is missing CURRENT_PROJECT_VERSION in project.yml" unless index
+
+  current = lines[index].match(/CURRENT_PROJECT_VERSION:\s*([0-9]+)/)[1].to_i
+  next_build = current + 1
+  lines[index] = lines[index].sub(/CURRENT_PROJECT_VERSION:\s*[0-9]+/, "CURRENT_PROJECT_VERSION: #{next_build}")
+
+  write_project(lines.join)
+  regenerate_project
+  puts "#{target} build number: #{current} -> #{next_build}"
+end
+
+def regenerate_project
+  command = ["xcodegen", "generate"]
+  stdout, stderr, status = Open3.capture3(*command, chdir: ROOT)
+  unless status.success?
+    warn stdout unless stdout.empty?
+    warn stderr unless stderr.empty?
+    abort "error: xcodegen generate failed"
+  end
+end
+
+def show
+  text = project_text
+  version = marketing_version(text).join(".")
+  puts "Marketing version: #{version}"
+
+  TARGETS.each do |platform, target|
+    lines = text.lines
+    range = target_block_range(lines, target)
+    line = range.map { |i| lines[i] }.find { |value| value.match?(/CURRENT_PROJECT_VERSION:/) }
+    build = line&.match(/CURRENT_PROJECT_VERSION:\s*([0-9]+)/)&.[](1)
+    puts "#{platform} build: #{build || "missing"}"
+  end
+end
+
+command, argument = ARGV
+
+case command
+when "bump-marketing"
+  bump_marketing(argument)
+when "bump-build"
+  bump_build(argument)
+when "show"
+  show
+else
+  usage!
+end

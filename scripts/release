@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RELEASE_BRANCH="${RELEASE_BRANCH:-master}"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  scripts/release train   # tag v<MARKETING_VERSION> and push it
+  scripts/release mac     # tag mac-v<MARKETING_VERSION> and push it
+EOF
+  exit 1
+}
+
+kind="${1:-}"
+case "$kind" in
+  train) tag_prefix="v" ;;
+  mac) tag_prefix="mac-v" ;;
+  *) usage ;;
+esac
+
+cd "$ROOT_DIR"
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "error: working tree is not clean. Commit or stash changes before creating a release tag." >&2
+  exit 1
+fi
+
+current_branch="$(git branch --show-current)"
+if [[ "$current_branch" != "$RELEASE_BRANCH" ]]; then
+  echo "error: releases must be tagged from $RELEASE_BRANCH. Current branch: $current_branch" >&2
+  exit 1
+fi
+
+git fetch origin "$RELEASE_BRANCH" --tags
+
+local_head="$(git rev-parse HEAD)"
+remote_head="$(git rev-parse "origin/$RELEASE_BRANCH")"
+if [[ "$local_head" != "$remote_head" ]]; then
+  echo "error: local $RELEASE_BRANCH is not in sync with origin/$RELEASE_BRANCH." >&2
+  echo "Push or pull before creating the release tag." >&2
+  exit 1
+fi
+
+version="$(awk '/MARKETING_VERSION:/ { print $2; exit }' project.yml)"
+if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+  echo "error: unable to parse MARKETING_VERSION from project.yml. Got: $version" >&2
+  exit 1
+fi
+
+tag="${tag_prefix}${version}"
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+  echo "error: local tag already exists: $tag" >&2
+  exit 1
+fi
+
+if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+  echo "error: remote tag already exists: $tag" >&2
+  exit 1
+fi
+
+git tag "$tag"
+git push origin "$tag"
+
+echo "Pushed release tag: $tag"

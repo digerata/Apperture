@@ -30,6 +30,14 @@ struct AppertureMacApp: App {
                 .environmentObject(hostModel)
                 .frame(minWidth: 980, minHeight: 640)
         }
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    (NSApp.delegate as? AppertureAppDelegate)?.checkForUpdates(nil)
+                }
+                .disabled(!AppertureAppDelegate.sparkleIsConfigured)
+            }
+        }
 
         Window("Pair iPhone", id: "pairing") {
             PairingFlowView()

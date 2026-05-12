@@ -18,7 +18,12 @@ Apple's current command-line flow uses `notarytool` and `stapler`. The older `al
 | `NOTARY_PASSWORD` | App-specific password for `NOTARY_APPLE_ID`. |
 | `DEVELOPER_ID_APPLICATION_CERT_BASE64` | Base64-encoded `.p12` certificate export. |
 | `DEVELOPER_ID_APPLICATION_CERT_PASSWORD` | Password used when exporting the `.p12`. |
+| `APPLE_DISTRIBUTION_CERT_BASE64` | Base64-encoded `.p12` Apple Distribution certificate for iOS TestFlight uploads. |
+| `APPLE_DISTRIBUTION_CERT_PASSWORD` | Password used when exporting the Apple Distribution `.p12`. |
 | `RELEASE_KEYCHAIN_PASSWORD` | Random password for the temporary CI keychain. |
+| `APP_STORE_CONNECT_API_KEY_ID` | App Store Connect API key ID for iOS export/upload. |
+| `APP_STORE_CONNECT_API_ISSUER_ID` | App Store Connect API issuer ID. |
+| `APP_STORE_CONNECT_API_KEY_BASE64` | Base64-encoded `.p8` App Store Connect API private key. |
 | `SPARKLE_PUBLIC_ED_KEY` | Optional alternative to storing the public key as a variable. |
 | `SPARKLE_FEED_URL` | Optional alternative to storing the feed URL as a variable. |
 
@@ -35,11 +40,16 @@ Encode the `.p12` for GitHub:
 base64 -i DeveloperIDApplication.p12 | pbcopy
 ```
 
-## GitHub Actions Release
+## Release Train
 
-Create and publish a GitHub Release, or run **Mac Release** manually from GitHub Actions.
+Push a release tag, or run **Release Train** manually from GitHub Actions.
 
-Use release tags that match the app version, such as `v0.1.0` or `mac-v0.1.0`. For published releases, the workflow checks out that tag, passes it into the notarization script, and fails if the tag version does not match the built app's `CFBundleShortVersionString`. For manual runs, provide the optional `release_tag` input if you want the same validation.
+Use release tags that match the app version, such as `v0.1.0` or `mac-v0.1.0`. For tag pushes, the workflow checks out that tag, verifies the tag is contained in `origin/master`, verifies the tag version matches `MARKETING_VERSION`, passes the tag into the notarization script, and fails if the tag version does not match the built app's `CFBundleShortVersionString`. For manual runs, provide the optional `release_tag` input if you want the same validation.
+
+Tag behavior:
+
+- `v0.1.0`: full release train. Builds the notarized Mac DMG, uploads the iOS app to TestFlight, and creates/updates the GitHub Release with Mac assets.
+- `mac-v0.1.0`: Mac-only escape hatch. Builds the notarized Mac DMG and creates/updates the GitHub Release, but skips iOS TestFlight.
 
 The workflow:
 
@@ -53,7 +63,35 @@ The workflow:
 8. Signs, notarizes, and staples the DMG.
 9. Writes a SHA-256 checksum next to the DMG.
 10. Uploads the DMG and checksum as workflow artifacts.
-11. Attaches the DMG and checksum to the GitHub Release when the workflow was triggered by publishing a release.
+11. Uploads the iOS app to TestFlight in parallel for `v*` tags.
+12. Creates or updates the GitHub Release and attaches the DMG/checksum when the workflow was triggered by a tag push.
+
+## Versioning
+
+The marketing version is shared by Mac and iOS. Build numbers are independent per platform.
+
+```sh
+scripts/version show
+scripts/version bump-marketing patch
+scripts/version bump-marketing minor
+scripts/version bump-marketing major
+scripts/version bump-build mac
+scripts/version bump-build ios
+```
+
+Each versioning command updates `project.yml` and regenerates the Xcode project with XcodeGen. Commit the version/build changes before tagging. The tag should point to the exact source that produced the release artifacts.
+
+To create the release tag with local safety checks:
+
+```sh
+scripts/release train
+```
+
+That requires a clean `master`, verifies local `master` equals `origin/master`, creates `v<MARKETING_VERSION>`, and pushes the tag. For the Mac-only escape hatch:
+
+```sh
+scripts/release mac
+```
 
 ## Local Release
 
