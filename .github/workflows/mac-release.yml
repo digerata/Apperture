@@ -2,10 +2,13 @@ name: Mac Release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "mac-v*"
-      - "v*"
+    inputs:
+      release_tag:
+        description: "Optional release tag to validate against, for example v0.1.0 or mac-v0.1.0"
+        required: false
+        type: string
+  release:
+    types: [published]
 
 concurrency:
   group: mac-release-${{ github.ref }}
@@ -26,14 +29,15 @@ jobs:
       NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
       SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL || secrets.SPARKLE_FEED_URL || 'https://runaperture.com/releases/appcast.xml' }}
       SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY || secrets.SPARKLE_PUBLIC_ED_KEY }}
-      SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
-      SPARKLE_DOWNLOAD_URL_PREFIX: ${{ vars.SPARKLE_DOWNLOAD_URL_PREFIX || secrets.SPARKLE_DOWNLOAD_URL_PREFIX || 'https://runaperture.com/releases' }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
       P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
       KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
@@ -95,14 +99,13 @@ jobs:
           path: |
             build/mac-release/artifacts/Apperture-*.dmg
             build/mac-release/artifacts/Apperture-*.dmg.sha256
-            build/mac-release/artifacts/sparkle/appcast.xml
           if-no-files-found: error
 
       - name: Attach DMG to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: |
             build/mac-release/artifacts/Apperture-*.dmg
             build/mac-release/artifacts/Apperture-*.dmg.sha256
-            build/mac-release/artifacts/sparkle/appcast.xml

@@ -11,13 +11,11 @@ APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.landmk1.apperture}"
 DEVELOPER_ID_IDENTITY="${DEVELOPER_ID_IDENTITY:-Developer ID Application}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://runaperture.com/releases/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
-SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX:-https://runaperture.com/releases}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/build/mac-release}"
 ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_ROOT/export"
 ARTIFACTS_PATH="$BUILD_ROOT/artifacts"
 DMG_STAGING_PATH="$BUILD_ROOT/dmg-staging"
-SPARKLE_UPDATES_PATH="$ARTIFACTS_PATH/sparkle"
 EXPORT_OPTIONS_PATH="$BUILD_ROOT/ExportOptions.plist"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
 NOTARY_UPLOAD_ZIP="$ARTIFACTS_PATH/$PRODUCT_NAME-notary-upload.zip"
@@ -59,22 +57,23 @@ EOF
     --wait
 }
 
-find_generate_appcast() {
-  if [[ -n "${SPARKLE_GENERATE_APPCAST:-}" && -x "$SPARKLE_GENERATE_APPCAST" ]]; then
-    echo "$SPARKLE_GENERATE_APPCAST"
-    return 0
+expected_version_from_release_tag() {
+  local tag="${RELEASE_TAG:-}"
+  [[ -n "$tag" ]] || return 0
+
+  tag="${tag#refs/tags/}"
+  tag="${tag#mac-v}"
+  tag="${tag#v}"
+
+  if [[ ! "$tag" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+    cat >&2 <<EOF
+error: RELEASE_TAG must look like v1.2.3 or mac-v1.2.3.
+Got: ${RELEASE_TAG}
+EOF
+    exit 1
   fi
 
-  local search_root
-  for search_root in "$HOME/Library/Developer/Xcode/DerivedData" "$ROOT_DIR/DerivedData"; do
-    [[ -d "$search_root" ]] || continue
-    find "$search_root" \
-      -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast" \
-      -type f \
-      -perm -111 \
-      -print \
-      2>/dev/null | head -n 1
-  done | head -n 1
+  echo "$tag"
 }
 
 require_tool xcodebuild
@@ -146,6 +145,18 @@ spctl --assess --type execute --verbose=4 "$APP_PATH" || true
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
 APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+EXPECTED_APP_VERSION="$(expected_version_from_release_tag)"
+if [[ -n "$EXPECTED_APP_VERSION" && "$APP_VERSION" != "$EXPECTED_APP_VERSION" ]]; then
+  cat >&2 <<EOF
+error: release tag version does not match the built app version.
+Release tag: ${RELEASE_TAG}
+Expected app version: ${EXPECTED_APP_VERSION}
+Built app version: ${APP_VERSION}
+Update CFBundleShortVersionString before publishing this release.
+EOF
+  exit 1
+fi
+
 DMG_BASENAME="${PRODUCT_NAME}-${APP_VERSION}"
 DMG_PATH="$ARTIFACTS_PATH/$DMG_BASENAME.dmg"
 
@@ -188,47 +199,6 @@ fi
 echo "Writing SHA-256 checksum..."
 shasum -a 256 "$DMG_PATH" | tee "$DMG_PATH.sha256"
 
-if [[ -n "${SPARKLE_PRIVATE_ED_KEY:-}" ]]; then
-  if [[ -z "$SPARKLE_PUBLIC_ED_KEY" || -z "$SPARKLE_FEED_URL" ]]; then
-    cat >&2 <<EOF
-error: SPARKLE_PRIVATE_ED_KEY is set, but Sparkle is not fully configured.
-Set SPARKLE_PUBLIC_ED_KEY and SPARKLE_FEED_URL before generating an appcast.
-EOF
-    exit 1
-  fi
-
-  echo "Generating Sparkle appcast..."
-  GENERATE_APPCAST="$(find_generate_appcast)"
-  if [[ -z "$GENERATE_APPCAST" ]]; then
-    echo "error: Sparkle generate_appcast tool was not found in DerivedData." >&2
-    exit 1
-  fi
-
-  rm -rf "$SPARKLE_UPDATES_PATH"
-  mkdir -p "$SPARKLE_UPDATES_PATH"
-  cp "$DMG_PATH" "$SPARKLE_UPDATES_PATH/"
-
-  SPARKLE_PRIVATE_KEY_FILE="$BUILD_ROOT/sparkle_ed_private_key"
-  printf "%s" "$SPARKLE_PRIVATE_ED_KEY" > "$SPARKLE_PRIVATE_KEY_FILE"
-  chmod 600 "$SPARKLE_PRIVATE_KEY_FILE"
-
-  if [[ -n "$SPARKLE_DOWNLOAD_URL_PREFIX" ]]; then
-    "$GENERATE_APPCAST" \
-      --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" \
-      --download-url-prefix "$SPARKLE_DOWNLOAD_URL_PREFIX" \
-      "$SPARKLE_UPDATES_PATH"
-  else
-    "$GENERATE_APPCAST" \
-      --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE" \
-      "$SPARKLE_UPDATES_PATH"
-  fi
-else
-  echo "SPARKLE_PRIVATE_ED_KEY is not set; skipping Sparkle appcast generation."
-fi
-
 echo "Release artifact:"
 echo "$DMG_PATH"
 echo "$DMG_PATH.sha256"
-if [[ -f "$SPARKLE_UPDATES_PATH/appcast.xml" ]]; then
-  echo "$SPARKLE_UPDATES_PATH/appcast.xml"
-fi
