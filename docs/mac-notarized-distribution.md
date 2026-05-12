@@ -33,7 +33,7 @@ Add these GitHub Actions variables:
 
 | Variable | Value |
 | --- | --- |
-| `SPARKLE_FEED_URL` | Public appcast URL, defaulting to `https://runaperture.com/releases/appcast.xml`. |
+| `SPARKLE_FEED_URL` | Public appcast URL, defaulting to `https://runapperture.com/releases/appcast.xml`. |
 | `SPARKLE_PUBLIC_ED_KEY` | Public EdDSA key printed by Sparkle `generate_keys`. |
 
 Encode the `.p12` for GitHub:

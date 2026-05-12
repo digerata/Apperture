@@ -10,8 +10,8 @@ settings:
     SWIFT_VERSION: 5.0
     CLANG_ENABLE_MODULES: YES
     ENABLE_USER_SCRIPT_SANDBOXING: NO
-    SPARKLE_FEED_URL: https://runaperture.com/releases/appcast.xml
-    SPARKLE_PUBLIC_ED_KEY: ""
+    SPARKLE_FEED_URL: https://runapperture.com/releases/appcast.xml
+    SPARKLE_PUBLIC_ED_KEY: D/FhR/NzyAxCqIHM/cdEYAdMyn1G8pulIwPP5fQv7Dg=
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
