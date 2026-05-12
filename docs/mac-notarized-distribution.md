@@ -64,6 +64,8 @@ Tag behavior:
 
 The manual workflow dispatch uses the same tag scheme. To retry only TestFlight, run **Release Train** manually with `release_tag` set to `ios-v0.1.0`. To retry only Mac packaging, use `mac-v0.1.0`.
 
+The iOS TestFlight job runs on GitHub's `macos-26` image so App Store Connect receives an IPA built with the iOS 26 SDK or newer. The Mac notarization job stays on `macos-15`.
+
 The workflow:
 
 1. Imports the Developer ID certificate into a temporary keychain.

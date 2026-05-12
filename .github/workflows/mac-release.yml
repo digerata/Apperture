@@ -188,7 +188,7 @@ jobs:
 
   upload-ios-testflight:
     name: Upload iOS TestFlight Build
-    runs-on: macos-15
+    runs-on: macos-26
     needs: validate-release
     if: needs.validate-release.outputs.ios_release == 'true'
     timeout-minutes: 60
@@ -212,6 +212,9 @@ jobs:
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Print Xcode version
+        run: xcodebuild -version
 
       - name: Import Apple Distribution certificate
         run: |
