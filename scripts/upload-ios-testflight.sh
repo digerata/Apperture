@@ -13,6 +13,8 @@ ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_ROOT/export"
 EXPORT_OPTIONS_PATH="$BUILD_ROOT/ExportOptions.plist"
 API_KEY_DIR="$HOME/.appstoreconnect/private_keys"
+PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+IOS_PROFILE_SPECIFIER="${IOS_PROVISIONING_PROFILE_SPECIFIER:-}"
 
 require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -46,15 +48,60 @@ EOF
   fi
 }
 
+install_provisioning_profile() {
+  [[ -n "${IOS_PROVISIONING_PROFILE_BASE64:-}" ]] || return 0
+
+  mkdir -p "$PROFILES_DIR"
+  local profile_path="$BUILD_ROOT/ios-app-store.mobileprovision"
+  local profile_plist="$BUILD_ROOT/ios-app-store-profile.plist"
+
+  printf "%s" "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$profile_path"
+  security cms -D -i "$profile_path" > "$profile_plist"
+
+  local uuid
+  uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$profile_plist")"
+  if [[ -z "$IOS_PROFILE_SPECIFIER" ]]; then
+    IOS_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$profile_plist")"
+  fi
+
+  cp "$profile_path" "$PROFILES_DIR/$uuid.mobileprovision"
+  echo "Installed provisioning profile: $IOS_PROFILE_SPECIFIER ($uuid)"
+}
+
 require_tool xcodebuild
 require_tool xcrun
+require_tool security
 
 configure_app_store_connect_key
 
 rm -rf "$BUILD_ROOT"
 mkdir -p "$EXPORT_PATH"
+install_provisioning_profile
 
-cat > "$EXPORT_OPTIONS_PATH" <<EOF
+if [[ -n "$IOS_PROFILE_SPECIFIER" ]]; then
+  cat > "$EXPORT_OPTIONS_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>$APP_BUNDLE_ID</key>
+		<string>$IOS_PROFILE_SPECIFIER</string>
+	</dict>
+	<key>teamID</key>
+	<string>$TEAM_ID</string>
+</dict>
+</plist>
+EOF
+else
+  cat > "$EXPORT_OPTIONS_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,19 +110,31 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 	<string>app-store-connect</string>
 	<key>signingStyle</key>
 	<string>automatic</string>
-	<key>signingCertificate</key>
-	<string>Apple Distribution</string>
 	<key>teamID</key>
 	<string>$TEAM_ID</string>
 </dict>
 </plist>
 EOF
+fi
 
 XCODE_AUTH_ARGS=(
   -authenticationKeyPath "$API_KEY_DIR/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
   -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID"
   -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
 )
+
+ARCHIVE_SIGNING_ARGS=(
+  CODE_SIGN_STYLE=Automatic
+  CODE_SIGN_IDENTITY="Apple Development"
+)
+
+if [[ -n "$IOS_PROFILE_SPECIFIER" ]]; then
+  ARCHIVE_SIGNING_ARGS=(
+    CODE_SIGN_STYLE=Manual
+    CODE_SIGN_IDENTITY="Apple Distribution"
+    PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_SPECIFIER"
+  )
+fi
 
 echo "Archiving $SCHEME for iOS..."
 xcodebuild archive \
@@ -87,8 +146,7 @@ xcodebuild archive \
   -allowProvisioningUpdates \
   "${XCODE_AUTH_ARGS[@]}" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
-  CODE_SIGN_STYLE=Automatic \
-  CODE_SIGN_IDENTITY="Apple Development" \
+  "${ARCHIVE_SIGNING_ARGS[@]}" \
   PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID"
 
 echo "Exporting IPA..."

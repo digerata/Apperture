@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional release tag to validate against, for example v0.1.0 or mac-v0.1.0"
+        description: "Optional release tag to validate against, for example v0.1.0, mac-v0.1.0, or ios-v0.1.0"
         required: false
         type: string
   push:
@@ -106,7 +106,7 @@ jobs:
     name: Build Notarized Mac DMG
     runs-on: macos-15
     needs: validate-release
-    if: needs.validate-release.outputs.mac_release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.validate-release.outputs.mac_release == 'true'
     timeout-minutes: 60
 
     env:
@@ -200,6 +200,8 @@ jobs:
       APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
       IOS_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
       IOS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      IOS_PROVISIONING_PROFILE_SPECIFIER: ${{ secrets.IOS_PROVISIONING_PROFILE_SPECIFIER }}
       KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
 
     steps:

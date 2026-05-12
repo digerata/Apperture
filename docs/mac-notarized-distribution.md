@@ -20,6 +20,8 @@ Apple's current command-line flow uses `notarytool` and `stapler`. The older `al
 | `DEVELOPER_ID_APPLICATION_CERT_PASSWORD` | Password used when exporting the `.p12`. |
 | `APPLE_DISTRIBUTION_CERT_BASE64` | Base64-encoded `.p12` Apple Distribution certificate for iOS TestFlight uploads. |
 | `APPLE_DISTRIBUTION_CERT_PASSWORD` | Password used when exporting the Apple Distribution `.p12`. |
+| `IOS_PROVISIONING_PROFILE_BASE64` | Optional but recommended base64-encoded App Store provisioning profile for `com.landmk1.apperture`. |
+| `IOS_PROVISIONING_PROFILE_SPECIFIER` | Optional provisioning profile name. If omitted, the script reads the name from the profile. |
 | `RELEASE_KEYCHAIN_PASSWORD` | Random password for the temporary CI keychain. |
 | `APP_STORE_CONNECT_API_KEY_ID` | App Store Connect API key ID for iOS export/upload. |
 | `APP_STORE_CONNECT_API_ISSUER_ID` | App Store Connect API issuer ID. |
@@ -40,6 +42,14 @@ Encode the `.p12` for GitHub:
 base64 -i DeveloperIDApplication.p12 | pbcopy
 ```
 
+Encode the iOS App Store provisioning profile for GitHub:
+
+```sh
+base64 -i Apperture_App_Store.mobileprovision | pbcopy
+```
+
+Providing `IOS_PROVISIONING_PROFILE_BASE64` makes the iOS lane use manual distribution signing. Without it, Xcode falls back to automatic cloud signing, which requires the App Store Connect API key to have cloud signing/provisioning permission.
+
 ## Release Train
 
 Push a release tag, or run **Release Train** manually from GitHub Actions.
@@ -51,6 +61,8 @@ Tag behavior:
 - `v0.1.0`: full release train. Builds the notarized Mac DMG, uploads the iOS app to TestFlight, and creates/updates the GitHub Release with Mac assets.
 - `mac-v0.1.0`: Mac-only escape hatch. Builds the notarized Mac DMG and creates/updates the GitHub Release, but skips iOS TestFlight.
 - `ios-v0.1.0`: iOS-only escape hatch. Uploads the iOS app to TestFlight, but skips the Mac DMG and GitHub Release assets.
+
+The manual workflow dispatch uses the same tag scheme. To retry only TestFlight, run **Release Train** manually with `release_tag` set to `ios-v0.1.0`. To retry only Mac packaging, use `mac-v0.1.0`.
 
 The workflow:
 
