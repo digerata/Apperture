@@ -15,7 +15,7 @@ def usage!
   warn <<~USAGE
     Usage:
       scripts/version bump-marketing patch|minor|major
-      scripts/version bump-build mac|ios
+      scripts/version bump-build mac|ios|both
       scripts/version show
   USAGE
   exit 1
@@ -72,7 +72,19 @@ def target_block_range(lines, target)
 end
 
 def bump_build(platform)
+  if platform == "both"
+    update_build(TARGETS.fetch("mac"))
+    update_build(TARGETS.fetch("ios"))
+    regenerate_project
+    return
+  end
+
   target = TARGETS[platform] || usage!
+  update_build(target)
+  regenerate_project
+end
+
+def update_build(target)
   lines = project_text.lines
   range = target_block_range(lines, target)
   index = range.find { |i| lines[i].match?(/^(\s*)CURRENT_PROJECT_VERSION:\s*([0-9]+)\s*$/) }
@@ -83,7 +95,6 @@ def bump_build(platform)
   lines[index] = lines[index].sub(/CURRENT_PROJECT_VERSION:\s*[0-9]+/, "CURRENT_PROJECT_VERSION: #{next_build}")
 
   write_project(lines.join)
-  regenerate_project
   puts "#{target} build number: #{current} -> #{next_build}"
 end
 

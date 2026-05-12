@@ -77,6 +77,7 @@ scripts/version bump-marketing minor
 scripts/version bump-marketing major
 scripts/version bump-build mac
 scripts/version bump-build ios
+scripts/version bump-build both
 ```
 
 Each versioning command updates `project.yml` and regenerates the Xcode project with XcodeGen. Commit the version/build changes before tagging. The tag should point to the exact source that produced the release artifacts.
