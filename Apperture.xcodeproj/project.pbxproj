@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		028918B96A8DC43FE1684EBA /* MirrorLayoutMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */; };
 		068AD539B99E8C19A2D11B2A /* RemoteControlMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */; };
+		087812A9C8D74F8B914D7B01 /* RemoteClipboardMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 087812A7C8D74F8B914D7B01 /* RemoteClipboardMessage.swift */; };
 		0EECB8D0A7CC8B659DBD5183 /* MacHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118635A423B2D5C671F2B700 /* MacHostView.swift */; };
 		21660F004A1BA9156F2BE9E3 /* AppertureiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0E2AF2847C638B175F5A17D /* AppertureiOSApp.swift */; };
 		2C443664E333FB45F11E1746 /* RemoteVideoMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */; };
@@ -28,6 +29,7 @@
 		8F4FF7F80754112B14E8F408 /* MirrorLayoutMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A26597F9CFDE617D64C77B6 /* MirrorLayoutMode.swift */; };
 		903E362929B93A61D2B5618F /* PairingStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 088A37067ABFA150776AE1CA /* PairingStores.swift */; };
 		94B884289B110864DF62ACA1 /* PairingStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 088A37067ABFA150776AE1CA /* PairingStores.swift */; };
+		9D4E01B17C0F42D6A35F0972 /* RemoteClipboardMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 087812A7C8D74F8B914D7B01 /* RemoteClipboardMessage.swift */; };
 		99E7F78DBB29EADCEE166271 /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5F1ED9318D52100E54E845C7 /* Media.xcassets */; };
 		99F1158CE409E8521035C331 /* HostSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D8DDB4253648C11A1B14A6 /* HostSettingsView.swift */; };
 		9B546A58AA6C8B6B41CAC26C /* HostModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E0E7F447051F528EC83AC40 /* HostModel.swift */; };
@@ -53,6 +55,7 @@
 
 /* Begin PBXFileReference section */
 		088A37067ABFA150776AE1CA /* PairingStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingStores.swift; sourceTree = "<group>"; };
+		087812A7C8D74F8B914D7B01 /* RemoteClipboardMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteClipboardMessage.swift; sourceTree = "<group>"; };
 		0B6711FED776A49487016D25 /* AppertureMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppertureMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		118635A423B2D5C671F2B700 /* MacHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHostView.swift; sourceTree = "<group>"; };
 		12FEF13A3B652BE2B76966DC /* AppertureiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AppertureiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -127,6 +130,7 @@
 				953184A086EFB331049EC963 /* MirrorWindow.swift */,
 				3E403E526D12207D16948D76 /* PairingModels.swift */,
 				088A37067ABFA150776AE1CA /* PairingStores.swift */,
+				087812A7C8D74F8B914D7B01 /* RemoteClipboardMessage.swift */,
 				79FD4E5C2DA9E18466AEE1F0 /* RemoteControlMessage.swift */,
 				8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */,
 				7228752FBA9AF934371EA050 /* RemoteVideoMessages.swift */,
@@ -288,6 +292,7 @@
 				A4C0DA92459830E4923D0677 /* MirrorWindow.swift in Sources */,
 				532687FBCDC8AD2BFB04E1EC /* PairingModels.swift in Sources */,
 				94B884289B110864DF62ACA1 /* PairingStores.swift in Sources */,
+				9D4E01B17C0F42D6A35F0972 /* RemoteClipboardMessage.swift in Sources */,
 				C601E3534637B847F12029C2 /* RemoteControlMessage.swift in Sources */,
 				70D2E1A265E6D795EA7FE7B8 /* RemoteFrameStreamClient.swift in Sources */,
 				D2A26E681AA66920122C6BE6 /* RemoteFrameStreamConfiguration.swift in Sources */,
@@ -318,6 +323,7 @@
 				B1C57516BAB73E0F747413BD /* MirrorWindow.swift in Sources */,
 				DA385D1DE78C50D89F1DE9C3 /* PairingModels.swift in Sources */,
 				903E362929B93A61D2B5618F /* PairingStores.swift in Sources */,
+				087812A9C8D74F8B914D7B01 /* RemoteClipboardMessage.swift in Sources */,
 				068AD539B99E8C19A2D11B2A /* RemoteControlMessage.swift in Sources */,
 				EC29B8260AF745E27852E070 /* RemoteFrameStreamConfiguration.swift in Sources */,
 				DA6A7B27549F8FBE4F4E1795 /* RemoteFrameStreamServer.swift in Sources */,

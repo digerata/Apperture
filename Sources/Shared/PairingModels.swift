@@ -458,23 +458,29 @@ struct RemoteClientEnvelope: Codable, Equatable {
         case pairingRequest
         case authRequest
         case control
+        case clipboard
     }
 
     var kind: Kind
     var pairingRequest: PairingRequest?
     var authRequest: PairingAuthRequest?
     var control: RemoteControlMessage?
+    var clipboard: RemoteClipboardMessage?
 
     static func pairingRequest(_ request: PairingRequest) -> RemoteClientEnvelope {
-        RemoteClientEnvelope(kind: .pairingRequest, pairingRequest: request, authRequest: nil, control: nil)
+        RemoteClientEnvelope(kind: .pairingRequest, pairingRequest: request, authRequest: nil, control: nil, clipboard: nil)
     }
 
     static func authRequest(_ request: PairingAuthRequest) -> RemoteClientEnvelope {
-        RemoteClientEnvelope(kind: .authRequest, pairingRequest: nil, authRequest: request, control: nil)
+        RemoteClientEnvelope(kind: .authRequest, pairingRequest: nil, authRequest: request, control: nil, clipboard: nil)
     }
 
     static func control(_ message: RemoteControlMessage) -> RemoteClientEnvelope {
-        RemoteClientEnvelope(kind: .control, pairingRequest: nil, authRequest: nil, control: message)
+        RemoteClientEnvelope(kind: .control, pairingRequest: nil, authRequest: nil, control: message, clipboard: nil)
+    }
+
+    static func clipboard(_ message: RemoteClipboardMessage) -> RemoteClientEnvelope {
+        RemoteClientEnvelope(kind: .clipboard, pairingRequest: nil, authRequest: nil, control: nil, clipboard: message)
     }
 }
 

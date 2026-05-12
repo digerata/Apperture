@@ -15,13 +15,14 @@ enum RemoteFrameStreamConfiguration {
         case appIcon = 10
         case pairingResponse = 11
         case authStatus = 12
+        case clipboard = 13
     }
 
     static let bonjourType = "_apperture._tcp"
     static let bonjourDomain = "local."
     static let tcpPort: UInt16 = 58224
     static let maxFrameBytes = 24_000_000
-    static let maxControlMessageBytes = 4_096
+    static let maxControlMessageBytes = 1_048_576
     static let targetFrameRate = 30.0
     static let jpegQuality = 0.48
     static let maxCapturePixelDimension = 2_560

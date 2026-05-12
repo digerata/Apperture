@@ -27,10 +27,12 @@ final class RemoteFrameStreamServer {
     private var wallpaperPacket: Data?
     private var windowListPacket: Data?
     private var appIconPackets: [String: Data] = [:]
+    private var clipboardPacket: Data?
     private var streamGeneration: UInt64 = 0
     private var lastBackpressureKeyFrameRequestTime: CFAbsoluteTime = 0
     private var statusHandler: ((FrameServerStatus) -> Void)?
     private var controlHandler: ((RemoteControlMessage) -> Void)?
+    private var clipboardHandler: ((RemoteClipboardMessage) -> Void)?
     private var pairingRequestHandler: ((UUID, PairingRequest, String?) -> Void)?
     private var authRequestHandler: ((PairingAuthRequest, String?) -> PairedDevice?)?
     private var connectionAuthenticatedHandler: ((UUID, PairedDevice, String?) -> Void)?
@@ -64,6 +66,7 @@ final class RemoteFrameStreamServer {
     func start(
         statusHandler: @escaping (FrameServerStatus) -> Void,
         controlHandler: @escaping (RemoteControlMessage) -> Void,
+        clipboardHandler: @escaping (RemoteClipboardMessage) -> Void,
         pairingRequestHandler: @escaping (UUID, PairingRequest, String?) -> Void,
         authRequestHandler: @escaping (PairingAuthRequest, String?) -> PairedDevice?,
         connectionAuthenticatedHandler: @escaping (UUID, PairedDevice, String?) -> Void,
@@ -72,6 +75,7 @@ final class RemoteFrameStreamServer {
         queue.async {
             self.statusHandler = statusHandler
             self.controlHandler = controlHandler
+            self.clipboardHandler = clipboardHandler
             self.pairingRequestHandler = pairingRequestHandler
             self.authRequestHandler = authRequestHandler
             self.connectionAuthenticatedHandler = connectionAuthenticatedHandler
@@ -136,6 +140,7 @@ final class RemoteFrameStreamServer {
             self.videoMaskSize = .zero
             self.wallpaperPacket = nil
             self.windowListPacket = nil
+            self.clipboardPacket = nil
             self.streamGeneration &+= 1
             self.lastFrameTime = 0
             self.resetFrameAdmission()
@@ -201,6 +206,17 @@ final class RemoteFrameStreamServer {
     func publishDeveloperActivity(_ event: DeveloperActivityEvent) {
         queue.async {
             guard let packet = Self.makePacket(type: .developerActivity, message: event) else { return }
+
+            for id in self.readyConnectionIDs {
+                self.send(packet, to: id)
+            }
+        }
+    }
+
+    func publishClipboard(_ message: RemoteClipboardMessage) {
+        queue.async {
+            guard let packet = Self.makePacket(type: .clipboard, message: message) else { return }
+            self.clipboardPacket = packet
 
             for id in self.readyConnectionIDs {
                 self.send(packet, to: id)
@@ -362,6 +378,7 @@ final class RemoteFrameStreamServer {
             guard self.listener == nil,
                   let statusHandler,
                   let controlHandler,
+                  let clipboardHandler,
                   let pairingRequestHandler,
                   let authRequestHandler,
                   let connectionAuthenticatedHandler,
@@ -369,6 +386,7 @@ final class RemoteFrameStreamServer {
             self.start(
                 statusHandler: statusHandler,
                 controlHandler: controlHandler,
+                clipboardHandler: clipboardHandler,
                 pairingRequestHandler: pairingRequestHandler,
                 authRequestHandler: authRequestHandler,
                 connectionAuthenticatedHandler: connectionAuthenticatedHandler,
@@ -433,6 +451,9 @@ final class RemoteFrameStreamServer {
         }
         if let videoMaskPacket {
             send(videoMaskPacket, to: id)
+        }
+        if let clipboardPacket {
+            send(clipboardPacket, to: id)
         }
         if let lastPacket, lastPacket.isKeyFrame {
             sendFrame(lastPacket, to: id)
@@ -666,6 +687,13 @@ final class RemoteFrameStreamServer {
             }
             guard let message = envelope.control else { return }
             handleControlMessage(message, from: id)
+        case .clipboard:
+            guard authenticatedDevices[id] != nil else {
+                closeConnection(id: id, reason: "Unauthenticated clipboard message.")
+                return
+            }
+            guard let message = envelope.clipboard else { return }
+            clipboardHandler?(message)
         }
     }
 
@@ -902,7 +930,7 @@ final class RemoteFrameStreamServer {
             encodedData = image.hasAlpha ? makePNGData(from: image) : makeJPEGData(from: image)
         case .wallpaper:
             encodedData = makeJPEGData(from: image)
-        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon, .pairingResponse, .authStatus:
+        case .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon, .pairingResponse, .authStatus, .clipboard:
             return nil
         }
 
@@ -936,7 +964,7 @@ final class RemoteFrameStreamServer {
         switch type {
         case .pairingResponse, .authStatus:
             encodedData = try? JSONEncoder.apperture.encode(message)
-        case .frame, .wallpaper, .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon:
+        case .frame, .wallpaper, .windowList, .videoFormat, .videoFrame, .videoMask, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .appIcon, .clipboard:
             encodedData = try? JSONEncoder().encode(message)
         }
 

@@ -468,6 +468,10 @@ final class iPhoneViewerViewController: UIViewController {
             self?.sendSpecialKeyChord(key, modifiers: modifiers)
         }
 
+        keyboardInputView.onPasteCommand = { [weak self] in
+            self?.sendLocalClipboardToHostIfAvailable()
+        }
+
         keyboardInputView.onAccessoryHeightChanged = { [weak self] in
             guard let self else { return }
             updateChromeLayoutForCurrentSize()
@@ -908,6 +912,11 @@ final class iPhoneViewerViewController: UIViewController {
     ) {
         nextSequenceNumber += 1
         streamClient.send(RemoteControlMessage(keyChordKey: key, modifiers: modifiers, sequenceNumber: nextSequenceNumber))
+    }
+
+    private func sendLocalClipboardToHostIfAvailable() {
+        guard let text = UIPasteboard.general.string else { return }
+        streamClient.sendClipboardText(text)
     }
 
     private func requestWindowList() {
@@ -3973,6 +3982,7 @@ private final class KeyboardInputView: UIView, UIKeyInput {
     var onKeyPress: (RemoteControlMessage.Key, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
     var onKeyChord: (String, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
     var onSpecialKeyChord: (RemoteControlMessage.Key, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
+    var onPasteCommand: () -> Void = {}
     var onAccessoryHeightChanged: () -> Void = {}
 
     var hasText: Bool { true }
@@ -4103,6 +4113,7 @@ private final class KeyboardInputView: UIView, UIKeyInput {
         case .copy:
             sendTextCommand("c", modifiers: [.command])
         case .paste:
+            onPasteCommand()
             sendTextCommand("v", modifiers: [.command])
         case .selectAll:
             sendTextCommand("a", modifiers: [.command])

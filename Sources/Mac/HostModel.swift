@@ -35,6 +35,8 @@ final class HostModel: ObservableObject {
     private let liveFramePreviewScheduler = LiveFramePreviewScheduler()
     private let remoteWindowListRefreshCoalescingInterval: TimeInterval = 1
     private var latestCaptureScreenFrame: CGRect?
+    private var clipboardSequenceNumber: UInt64 = 0
+    private var lastPublishedClipboardChangeCount = NSPasteboard.general.changeCount
     private var activeAuditSessionIDs: [UUID: String] = [:]
     private var pendingPairingConnectionID: UUID?
     private var activeStreamingApplicationName: String?
@@ -52,6 +54,11 @@ final class HostModel: ObservableObject {
             controlHandler: { [weak self] message in
                 Task { @MainActor in
                     self?.handleRemoteControl(message)
+                }
+            },
+            clipboardHandler: { [weak self] message in
+                Task { @MainActor in
+                    self?.handleRemoteClipboard(message)
                 }
             },
             pairingRequestHandler: { [weak self] connectionID, request, endpoint in
@@ -323,7 +330,49 @@ final class HostModel: ObservableObject {
         default:
             guard let window = selectedWindow else { return }
             inputInjectionService.perform(message, in: window, targetFrame: latestCaptureScreenFrame)
+            publishClipboardAfterCopyIfNeeded(for: message)
         }
+    }
+
+    private func handleRemoteClipboard(_ message: RemoteClipboardMessage) {
+        guard message.kind == .plainText else { return }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(message.text, forType: .string)
+        lastPublishedClipboardChangeCount = pasteboard.changeCount
+    }
+
+    private func publishClipboardAfterCopyIfNeeded(for message: RemoteControlMessage) {
+        guard isClipboardProducingCommand(message) else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            self?.publishCurrentClipboardIfChanged()
+        }
+    }
+
+    private func publishCurrentClipboardIfChanged() {
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount != lastPublishedClipboardChangeCount else { return }
+        guard let text = pasteboard.string(forType: .string) else {
+            lastPublishedClipboardChangeCount = pasteboard.changeCount
+            return
+        }
+
+        lastPublishedClipboardChangeCount = pasteboard.changeCount
+        clipboardSequenceNumber += 1
+        frameServer.publishClipboard(RemoteClipboardMessage(text: text, sequenceNumber: clipboardSequenceNumber))
+    }
+
+    private func isClipboardProducingCommand(_ message: RemoteControlMessage) -> Bool {
+        guard message.kind == .keyChord,
+              let text = message.text?.lowercased(),
+              text.count == 1,
+              Set(message.modifiers ?? []) == Set([.command]) else {
+            return false
+        }
+
+        return text == "c" || text == "x"
     }
 
     private func refreshWindowsForRemoteRequest() {

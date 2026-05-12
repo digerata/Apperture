@@ -52,7 +52,7 @@ uint8 packetType
 packet bytes
 ```
 
-`packetLength` includes the `packetType` byte. The iOS client rejects host packets with length `0` or length greater than or equal to `24_000_000` bytes. The host rejects client control payloads with length `0` or length greater than `4_096` bytes.
+`packetLength` includes the `packetType` byte. The iOS client rejects host packets with length `0` or length greater than or equal to `24_000_000` bytes. The host rejects client control payloads with length `0` or length greater than `1_048_576` bytes.
 
 Most host packet bodies are JSON encoded with default `JSONEncoder`. The exceptions are pairing/auth packets, which use ISO-8601 `JSONEncoder.apperture`, and binary image/video packets.
 
@@ -73,6 +73,7 @@ Most host packet bodies are JSON encoded with default `JSONEncoder`. The excepti
 | `10` | `appIcon` | Host to client | JSON `RemoteAppIconMessage`, including PNG bytes as JSON `Data`. |
 | `11` | `pairingResponse` | Host to client | ISO-8601 JSON `PairingResponse`. |
 | `12` | `authStatus` | Host to client | ISO-8601 JSON `PairingAuthStatus`. |
+| `13` | `clipboard` | Host to client | JSON `RemoteClipboardMessage` containing plain text copied from the mirrored Mac app. |
 
 If a host payload begins with an unknown byte, the iOS client treats the whole payload as a legacy image frame unless it is currently waiting for a stream reset after a window selection.
 
@@ -85,7 +86,8 @@ Client messages use `RemoteClientEnvelope`:
   "kind": "authRequest",
   "pairingRequest": null,
   "authRequest": { "...": "..." },
-  "control": null
+  "control": null,
+  "clipboard": null
 }
 ```
 
@@ -94,8 +96,9 @@ Valid `kind` values are:
 - `pairingRequest`: carries a `PairingRequest`.
 - `authRequest`: carries a `PairingAuthRequest`.
 - `control`: carries a `RemoteControlMessage`.
+- `clipboard`: carries a `RemoteClipboardMessage` from the iOS pasteboard to the Mac host.
 
-The host closes the connection for malformed envelopes, unauthenticated control messages, invalid legacy control payloads, or failed authentication.
+The host closes the connection for malformed envelopes, unauthenticated control or clipboard messages, invalid legacy control payloads, or failed authentication.
 
 ## Pairing
 
@@ -174,7 +177,8 @@ After successful authentication, the host may send these packets immediately:
 3. `wallpaper`, if already available
 4. `videoFormat`, if already available
 5. `videoMask`, if already available
-6. The last encoded frame, but only if it is a key frame
+6. `clipboard`, if the host has a cached remote clipboard value
+7. The last encoded frame, but only if it is a key frame
 
 The host intentionally does not replay a cached window list during authorization. `HostModel` refreshes windows after authentication and publishes a fresh list.
 
@@ -209,6 +213,22 @@ Commands:
 Supported `key` values are `deleteBackward`, `returnKey`, `tab`, and `escape`.
 
 Supported `modifiers` are `shift`, `control`, `option`, and `command`.
+
+## Clipboard Messages
+
+`RemoteClipboardMessage` is used for text-only clipboard sharing between the Mac host and iOS client.
+
+Fields:
+
+- `kind`: currently always `plainText`.
+- `text`: the clipboard string.
+- `sequenceNumber`: monotonically increasing sender-side number for ordering/debugging semantics.
+
+The iOS client sends `RemoteClientEnvelope.clipboard` immediately before sending a Paste command from the keyboard accessory toolbar. The Mac host writes that text into `NSPasteboard.general`, then receives the following Cmd-V key chord normally.
+
+The Mac host publishes a `clipboard` packet after remote Cmd-C or Cmd-X changes `NSPasteboard.general`. The iOS client writes the received text into `UIPasteboard.general`, allowing it to be pasted into other iOS apps.
+
+Only plain text is synchronized. Images, files, attributed strings, and other pasteboard item types are intentionally ignored.
 
 Supported `scrollPhase` values are `began`, `changed`, `ended`, `cancelled`, `momentumBegan`, `momentumChanged`, and `momentumEnded`. The current Mac event posting path does not encode phase into the emitted `CGEvent`; it uses the deltas to post continuous scroll events.
 
@@ -325,4 +345,3 @@ The audit log is local to the Mac and retained for 30 days. It does not record v
 - The host accepts a legacy bare `RemoteControlMessage` after authentication.
 - Pairing QR decoding supports older full-payload and compact-payload forms.
 - The protocol currently has no negotiated version beyond the pairing offer's `version = 1`. Adding a future packet or command should preserve unknown/legacy behavior or introduce explicit capability negotiation.
-

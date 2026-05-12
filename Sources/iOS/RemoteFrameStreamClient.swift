@@ -19,6 +19,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var developerActivity = DeveloperActivityState(eventDirectoryPath: "")
     @Published private(set) var pairingManager = IOSPairingManager()
     @Published private(set) var pairingStatusMessage: String?
+    @Published private(set) var remoteClipboard: RemoteClipboardMessage?
     let videoSampleBuffers = PassthroughSubject<CMSampleBuffer, Never>()
     var currentHostID: String? { activeCandidateID }
 
@@ -120,6 +121,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         windows = []
         streamDiagnostics = nil
         developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+        remoteClipboard = nil
         pairingStatusMessage = nil
         nextSequenceNumber = 0
         lastKeyFrameRequestTime = 0
@@ -162,6 +164,15 @@ final class RemoteFrameStreamClient: ObservableObject {
                 }
             })
         }
+    }
+
+    func sendClipboardText(_ text: String) {
+        sendEnvelope(.clipboard(RemoteClipboardMessage(text: text, sequenceNumber: nextMessageSequenceNumber())))
+    }
+
+    private func nextMessageSequenceNumber() -> UInt64 {
+        nextSequenceNumber += 1
+        return nextSequenceNumber
     }
 
     private func sendEnvelope(_ envelope: RemoteClientEnvelope) {
@@ -712,6 +723,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         windows = []
         streamDiagnostics = nil
         developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+        remoteClipboard = nil
         isAwaitingStreamResetAfterSelection = false
         streamDecodeGeneration += 1
         videoDecoder.reset()
@@ -938,6 +950,12 @@ final class RemoteFrameStreamClient: ObservableObject {
                 return
             }
             developerActivity.apply(event)
+        case .clipboard:
+            guard let message = try? JSONDecoder().decode(RemoteClipboardMessage.self, from: Data(imageData)) else {
+                return
+            }
+            remoteClipboard = message
+            UIPasteboard.general.string = message.text
         case .hostInfo:
             guard let message = try? JSONDecoder().decode(RemoteHostInfoMessage.self, from: Data(imageData)) else {
                 return
@@ -1010,6 +1028,7 @@ final class RemoteFrameStreamClient: ObservableObject {
         windows = []
         streamDiagnostics = nil
         developerActivity = DeveloperActivityState(eventDirectoryPath: "")
+        remoteClipboard = nil
         isAwaitingStreamResetAfterSelection = false
         streamDecodeGeneration += 1
         videoDecoder.reset()
@@ -1315,7 +1334,7 @@ final class RemoteFrameStreamClient: ObservableObject {
 private extension RemoteFrameStreamConfiguration.PacketType {
     var allowsDuringStreamSelectionResetWait: Bool {
         switch self {
-        case .wallpaper, .windowList, .appIcon, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .pairingResponse, .authStatus:
+        case .wallpaper, .windowList, .appIcon, .streamDiagnostics, .developerActivity, .streamReset, .hostInfo, .pairingResponse, .authStatus, .clipboard:
             return true
         case .frame, .videoFormat, .videoFrame, .videoMask:
             return false
