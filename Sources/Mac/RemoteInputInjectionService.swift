@@ -36,6 +36,9 @@ final class RemoteInputInjectionService {
             guard let key = message.key else { return }
             prepareTargetForKeyboardInput(currentWindow)
             postKey(key)
+        case .keyChord:
+            prepareTargetForKeyboardInput(currentWindow)
+            postKeyChord(message)
         case .requestWindowList, .selectWindow, .startStream, .requestKeyFrame:
             return
         }
@@ -243,25 +246,63 @@ final class RemoteInputInjectionService {
         }
     }
 
-    private func postKey(_ key: RemoteControlMessage.Key) {
+    private func postKey(_ key: RemoteControlMessage.Key, modifiers: [RemoteControlMessage.Modifier] = []) {
         guard let keyCode = key.macVirtualKeyCode else { return }
 
-        postKeyboardEvent(keyCode: keyCode, isKeyDown: true)
-        postKeyboardEvent(keyCode: keyCode, isKeyDown: false)
+        let modifierKeys = ModifierKey.modifiers(for: modifiers)
+        let flags = ModifierKey.flags(for: modifierKeys)
+
+        postWithModifiers(modifierKeys, flags: flags) {
+            postKeyboardEvent(keyCode: keyCode, flags: flags, isKeyDown: true)
+            postKeyboardEvent(keyCode: keyCode, flags: flags, isKeyDown: false)
+        }
     }
 
-    private func postKeyStroke(_ keyStroke: KeyStroke) {
-        let modifiers = ModifierKey.modifiers(for: keyStroke.flags)
+    private func postKeyChord(_ message: RemoteControlMessage) {
+        let modifiers = message.modifiers ?? []
 
-        for modifier in modifiers {
-            postModifierKey(modifier, isKeyDown: true)
+        if let key = message.key {
+            postKey(key, modifiers: modifiers)
+            return
         }
 
-        postKeyboardEvent(keyCode: keyStroke.keyCode, flags: keyStroke.flags, isKeyDown: true)
-        postKeyboardEvent(keyCode: keyStroke.keyCode, flags: keyStroke.flags, isKeyDown: false)
+        guard let text = message.text,
+              text.count == 1,
+              let character = text.first,
+              let keyStroke = KeyStroke(character: character) else {
+            return
+        }
+
+        postKeyStroke(keyStroke, extraModifiers: modifiers)
+    }
+
+    private func postKeyStroke(_ keyStroke: KeyStroke, extraModifiers: [RemoteControlMessage.Modifier] = []) {
+        let modifiers = ModifierKey.mergedModifiers(for: keyStroke.flags, extraModifiers: extraModifiers)
+        let flags = keyStroke.flags.union(ModifierKey.flags(for: modifiers))
+
+        postWithModifiers(modifiers, flags: flags) {
+            postKeyboardEvent(keyCode: keyStroke.keyCode, flags: flags, isKeyDown: true)
+            postKeyboardEvent(keyCode: keyStroke.keyCode, flags: flags, isKeyDown: false)
+        }
+    }
+
+    private func postWithModifiers(
+        _ modifiers: [ModifierKey],
+        flags: CGEventFlags,
+        perform body: () -> Void
+    ) {
+        var activeFlags = CGEventFlags()
+
+        for modifier in modifiers {
+            activeFlags.insert(modifier.flag)
+            postModifierKey(modifier, flags: activeFlags)
+        }
+
+        body()
 
         for modifier in modifiers.reversed() {
-            postModifierKey(modifier, isKeyDown: false)
+            activeFlags.remove(modifier.flag)
+            postModifierKey(modifier, flags: activeFlags)
         }
     }
 
@@ -274,17 +315,17 @@ final class RemoteInputInjectionService {
         event.post(tap: .cghidEventTap)
     }
 
-    private func postModifierKey(_ modifier: ModifierKey, isKeyDown: Bool) {
+    private func postModifierKey(_ modifier: ModifierKey, flags: CGEventFlags) {
         guard let event = CGEvent(
             keyboardEventSource: eventSource,
             virtualKey: modifier.keyCode,
-            keyDown: isKeyDown
+            keyDown: flags.contains(modifier.flag)
         ) else {
             return
         }
 
         event.type = .flagsChanged
-        event.flags = isKeyDown ? modifier.flag : []
+        event.flags = flags
         event.post(tap: .cghidEventTap)
     }
 }
@@ -458,11 +499,20 @@ private struct KeyStroke {
 
 private enum ModifierKey: CaseIterable {
     case shift
+    case control
+    case option
+    case command
 
     var keyCode: CGKeyCode {
         switch self {
         case .shift:
             return 56
+        case .control:
+            return 59
+        case .option:
+            return 58
+        case .command:
+            return 55
         }
     }
 
@@ -470,10 +520,50 @@ private enum ModifierKey: CaseIterable {
         switch self {
         case .shift:
             return .maskShift
+        case .control:
+            return .maskControl
+        case .option:
+            return .maskAlternate
+        case .command:
+            return .maskCommand
         }
     }
 
     static func modifiers(for flags: CGEventFlags) -> [ModifierKey] {
         allCases.filter { flags.contains($0.flag) }
+    }
+
+    static func modifiers(for remoteModifiers: [RemoteControlMessage.Modifier]) -> [ModifierKey] {
+        allCases.filter { modifier in
+            remoteModifiers.contains(modifier.remoteModifier)
+        }
+    }
+
+    static func mergedModifiers(
+        for flags: CGEventFlags,
+        extraModifiers: [RemoteControlMessage.Modifier]
+    ) -> [ModifierKey] {
+        allCases.filter { modifier in
+            flags.contains(modifier.flag) || extraModifiers.contains(modifier.remoteModifier)
+        }
+    }
+
+    static func flags(for modifiers: [ModifierKey]) -> CGEventFlags {
+        modifiers.reduce([]) { partialResult, modifier in
+            partialResult.union(modifier.flag)
+        }
+    }
+
+    private var remoteModifier: RemoteControlMessage.Modifier {
+        switch self {
+        case .shift:
+            return .shift
+        case .control:
+            return .control
+        case .option:
+            return .option
+        case .command:
+            return .command
+        }
     }
 }

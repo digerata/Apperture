@@ -188,6 +188,7 @@ final class iPhoneViewerViewController: UIViewController {
     private var developerActivityTopConstraint: NSLayoutConstraint?
     private var developerActivityLeadingConstraint: NSLayoutConstraint?
     private var developerActivityTrailingConstraint: NSLayoutConstraint?
+    private var keyboardOverlapHeight: CGFloat = 0
     private var frameTimestamps: [CFTimeInterval] = []
     private var displayedFPS: Double?
     private var latestStreamDiagnostics: RemoteStreamDiagnosticsMessage?
@@ -451,12 +452,26 @@ final class iPhoneViewerViewController: UIViewController {
             isVideoDebugEnabled.toggle()
         }
 
-        keyboardInputView.onTextInput = { [weak self] text in
-            self?.sendTextInput(text)
+        keyboardInputView.onTextInput = { [weak self] text, modifiers in
+            self?.sendTextInput(text, modifiers: modifiers)
         }
 
-        keyboardInputView.onKeyPress = { [weak self] key in
-            self?.sendKeyPress(key)
+        keyboardInputView.onKeyPress = { [weak self] key, modifiers in
+            self?.sendKeyPress(key, modifiers: modifiers)
+        }
+
+        keyboardInputView.onKeyChord = { [weak self] text, modifiers in
+            self?.sendKeyChord(text, modifiers: modifiers)
+        }
+
+        keyboardInputView.onSpecialKeyChord = { [weak self] key, modifiers in
+            self?.sendSpecialKeyChord(key, modifiers: modifiers)
+        }
+
+        keyboardInputView.onAccessoryHeightChanged = { [weak self] in
+            guard let self else { return }
+            updateChromeLayoutForCurrentSize()
+            view.layoutIfNeeded()
         }
     }
 
@@ -471,6 +486,18 @@ final class iPhoneViewerViewController: UIViewController {
             self,
             selector: #selector(applicationWillEnterForeground),
             name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillChangeFrame),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillHide),
+            name: UIResponder.keyboardWillHideNotification,
             object: nil
         )
     }
@@ -629,6 +656,63 @@ final class iPhoneViewerViewController: UIViewController {
     @objc private func applicationWillEnterForeground() {
         endSessionBackgroundTask()
         beginResumeIfAvailable()
+    }
+
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        updateKeyboardOverlap(from: notification)
+    }
+
+    @objc private func keyboardWillHide(_ notification: Notification) {
+        if isKeyboardPresented {
+            isKeyboardPresented = false
+        }
+        updateKeyboardOverlap(from: notification, forcedOverlapHeight: 0)
+    }
+
+    private func updateKeyboardOverlap(from notification: Notification, forcedOverlapHeight: CGFloat? = nil) {
+        let newOverlapHeight: CGFloat
+        if let forcedOverlapHeight {
+            newOverlapHeight = forcedOverlapHeight
+        } else {
+            newOverlapHeight = keyboardOverlapHeight(from: notification)
+        }
+
+        guard abs(keyboardOverlapHeight - newOverlapHeight) > 0.5 else { return }
+        keyboardOverlapHeight = newOverlapHeight
+
+        let animations = { [weak self] in
+            guard let self else { return }
+            updateChromeLayoutForCurrentSize()
+            view.layoutIfNeeded()
+        }
+
+        guard view.window != nil else {
+            animations()
+            return
+        }
+
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
+        let curveValue = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt
+            ?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
+        let options = UIView.AnimationOptions(rawValue: curveValue << 16)
+
+        UIView.animate(
+            withDuration: duration,
+            delay: 0,
+            options: [options, .beginFromCurrentState, .allowUserInteraction],
+            animations: animations
+        )
+    }
+
+    private func keyboardOverlapHeight(from notification: Notification) -> CGFloat {
+        guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let window = view.window else {
+            return 0
+        }
+
+        let keyboardFrameInView = view.convert(keyboardFrame, from: window.screen.coordinateSpace)
+        let overlapHeight = view.bounds.intersection(keyboardFrameInView).height
+        return max(0, overlapHeight)
     }
 
     private func beginSessionBackgroundTaskIfNeeded() {
@@ -792,15 +876,38 @@ final class iPhoneViewerViewController: UIViewController {
             : currentFrameHasAlphaMask
     }
 
-    private func sendTextInput(_ text: String) {
+    private func sendTextInput(
+        _ text: String,
+        modifiers: [RemoteControlMessage.Modifier] = []
+    ) {
         guard !text.isEmpty else { return }
         nextSequenceNumber += 1
-        streamClient.send(RemoteControlMessage(text: text, sequenceNumber: nextSequenceNumber))
+        streamClient.send(RemoteControlMessage(text: text, modifiers: modifiers, sequenceNumber: nextSequenceNumber))
     }
 
-    private func sendKeyPress(_ key: RemoteControlMessage.Key) {
+    private func sendKeyPress(
+        _ key: RemoteControlMessage.Key,
+        modifiers: [RemoteControlMessage.Modifier] = []
+    ) {
         nextSequenceNumber += 1
-        streamClient.send(RemoteControlMessage(key: key, sequenceNumber: nextSequenceNumber))
+        streamClient.send(RemoteControlMessage(key: key, modifiers: modifiers, sequenceNumber: nextSequenceNumber))
+    }
+
+    private func sendKeyChord(
+        _ text: String,
+        modifiers: [RemoteControlMessage.Modifier]
+    ) {
+        guard text.count == 1 else { return }
+        nextSequenceNumber += 1
+        streamClient.send(RemoteControlMessage(keyChordText: text, modifiers: modifiers, sequenceNumber: nextSequenceNumber))
+    }
+
+    private func sendSpecialKeyChord(
+        _ key: RemoteControlMessage.Key,
+        modifiers: [RemoteControlMessage.Modifier]
+    ) {
+        nextSequenceNumber += 1
+        streamClient.send(RemoteControlMessage(keyChordKey: key, modifiers: modifiers, sequenceNumber: nextSequenceNumber))
     }
 
     private func requestWindowList() {
@@ -1123,10 +1230,12 @@ final class iPhoneViewerViewController: UIViewController {
         let isLandscape = view.bounds.width > view.bounds.height
         toolbarView.usesLandscapeLayout = isLandscape
         toolbarView.interfaceOrientation = view.window?.windowScene?.interfaceOrientation ?? .unknown
+        let keyboardLift = max(0, keyboardOverlapHeight)
+        let keyboardOnlyLift = max(0, keyboardLift - keyboardInputView.accessoryHeight)
         mirrorLeadingConstraint?.constant = isLandscape ? max(16, view.safeAreaInsets.left + 16) : 0
         mirrorTrailingConstraint?.constant = isLandscape ? -max(16, view.safeAreaInsets.right + 16) : 0
-        mirrorTopConstraint?.constant = isLandscape ? 0 : 76
-        mirrorBottomConstraint?.constant = isLandscape ? 0 : -8
+        mirrorTopConstraint?.constant = isLandscape ? -keyboardLift : 76
+        mirrorBottomConstraint?.constant = isLandscape ? -keyboardLift : -keyboardOnlyLift
         developerActivityTopConstraint?.constant = isLandscape ? 12 : 72
         developerActivityLeadingConstraint?.constant = isLandscape ? max(84, view.safeAreaInsets.left + 84) : 16
         developerActivityTrailingConstraint?.constant = isLandscape ? -max(20, view.safeAreaInsets.right + 20) : -16
@@ -3860,8 +3969,11 @@ private struct ScrollSample {
 }
 
 private final class KeyboardInputView: UIView, UIKeyInput {
-    var onTextInput: (String) -> Void = { _ in }
-    var onKeyPress: (RemoteControlMessage.Key) -> Void = { _ in }
+    var onTextInput: (String, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
+    var onKeyPress: (RemoteControlMessage.Key, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
+    var onKeyChord: (String, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
+    var onSpecialKeyChord: (RemoteControlMessage.Key, [RemoteControlMessage.Modifier]) -> Void = { _, _ in }
+    var onAccessoryHeightChanged: () -> Void = {}
 
     var hasText: Bool { true }
     var autocapitalizationType: UITextAutocapitalizationType = .none
@@ -3873,22 +3985,61 @@ private final class KeyboardInputView: UIView, UIKeyInput {
     var keyboardAppearance: UIKeyboardAppearance = .dark
     var keyboardType: UIKeyboardType = .default
     var returnKeyType: UIReturnKeyType = .default
+    private var activeModifiers: Set<RemoteControlMessage.Modifier> = [] {
+        didSet {
+            accessoryToolbarView.activeModifiers = activeModifiers
+        }
+    }
+    private lazy var accessoryToolbarView: KeyboardAccessoryToolbarView = {
+        let toolbar = KeyboardAccessoryToolbarView()
+        toolbar.onDismissTapped = { [weak self] in
+            self?.activeModifiers = []
+            self?.resignFirstResponder()
+        }
+        toolbar.onEscapeTapped = { [weak self] in
+            self?.sendKeyPress(.escape)
+        }
+        toolbar.onModifierTapped = { [weak self] modifier in
+            self?.toggleModifier(modifier)
+        }
+        toolbar.onTabTapped = { [weak self] in
+            self?.sendKeyPress(.tab)
+        }
+        toolbar.onEditCommandTapped = { [weak self] command in
+            self?.sendEditCommand(command)
+        }
+        toolbar.onUndoTapped = { [weak self] in
+            self?.sendTextCommand("z", modifiers: [.command])
+        }
+        toolbar.onRedoTapped = { [weak self] in
+            self?.sendTextCommand("z", modifiers: [.command, .shift])
+        }
+        toolbar.onHeightChanged = { [weak self] in
+            self?.reloadInputViews()
+            self?.onAccessoryHeightChanged()
+        }
+        return toolbar
+    }()
 
     override var canBecomeFirstResponder: Bool { true }
+    override var inputAccessoryView: UIView? { accessoryToolbarView }
+    var accessoryHeight: CGFloat {
+        max(accessoryToolbarView.bounds.height, accessoryToolbarView.intrinsicContentSize.height)
+    }
 
     func insertText(_ text: String) {
         switch text {
         case "\n":
-            onKeyPress(.returnKey)
+            sendKeyPress(.returnKey)
         case "\t":
-            onKeyPress(.tab)
+            sendKeyPress(.tab)
         default:
-            onTextInput(text)
+            handleTextInput(text)
         }
     }
 
     func deleteBackward() {
-        onKeyPress(.deleteBackward)
+        sendKeyPress(.deleteBackward)
     }
 
     override var keyCommands: [UIKeyCommand]? {
@@ -3898,8 +4049,401 @@ private final class KeyboardInputView: UIView, UIKeyInput {
     }
 
     @objc private func handleEscapeKey() {
-        onKeyPress(.escape)
+        sendKeyPress(.escape)
     }
+
+    private func toggleModifier(_ modifier: RemoteControlMessage.Modifier) {
+        if activeModifiers.contains(modifier) {
+            activeModifiers.remove(modifier)
+        } else {
+            activeModifiers.insert(modifier)
+        }
+    }
+
+    private func handleTextInput(_ text: String) {
+        guard !text.isEmpty else { return }
+
+        guard let firstCharacter = text.first,
+              !activeModifiers.isEmpty,
+              Self.isChordTrigger(firstCharacter) else {
+            onTextInput(text, [])
+            return
+        }
+
+        onKeyChord(String(firstCharacter), orderedActiveModifiers())
+        activeModifiers = []
+        accessoryToolbarView.collapseExpandedPanel()
+
+        let remainingText = String(text.dropFirst())
+        if !remainingText.isEmpty {
+            onTextInput(remainingText, [])
+        }
+    }
+
+    private func sendKeyPress(_ key: RemoteControlMessage.Key) {
+        if activeModifiers.isEmpty {
+            onKeyPress(key, [])
+        } else {
+            onSpecialKeyChord(key, orderedActiveModifiers())
+            activeModifiers = []
+            accessoryToolbarView.collapseExpandedPanel()
+        }
+    }
+
+    private func sendTextCommand(_ text: String, modifiers: [RemoteControlMessage.Modifier]) {
+        activeModifiers = []
+        accessoryToolbarView.collapseExpandedPanel()
+        onKeyChord(text, modifiers)
+    }
+
+    private func sendEditCommand(_ command: KeyboardAccessoryToolbarView.EditCommand) {
+        switch command {
+        case .cut:
+            sendTextCommand("x", modifiers: [.command])
+        case .copy:
+            sendTextCommand("c", modifiers: [.command])
+        case .paste:
+            sendTextCommand("v", modifiers: [.command])
+        case .selectAll:
+            sendTextCommand("a", modifiers: [.command])
+        }
+    }
+
+    private func orderedActiveModifiers() -> [RemoteControlMessage.Modifier] {
+        RemoteControlMessage.Modifier.allCases.filter { activeModifiers.contains($0) }
+    }
+
+    private static func isChordTrigger(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
+    }
+}
+
+private final class KeyboardAccessoryToolbarView: UIView {
+    enum EditCommand {
+        case cut
+        case copy
+        case paste
+        case selectAll
+    }
+
+    private enum ExpandedPanel {
+        case controls
+        case edit
+    }
+
+    var onDismissTapped: () -> Void = {}
+    var onEscapeTapped: () -> Void = {}
+    var onModifierTapped: (RemoteControlMessage.Modifier) -> Void = { _ in }
+    var onTabTapped: () -> Void = {}
+    var onEditCommandTapped: (EditCommand) -> Void = { _ in }
+    var onUndoTapped: () -> Void = {}
+    var onRedoTapped: () -> Void = {}
+    var onHeightChanged: () -> Void = {}
+
+    var activeModifiers: Set<RemoteControlMessage.Modifier> = [] {
+        didSet {
+            updateButtonStates()
+        }
+    }
+
+    private var expandedPanel: ExpandedPanel?
+    private var modifierButtons: [RemoteControlMessage.Modifier: UIButton] = [:]
+    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let contentStackView = UIStackView()
+    private let expandedStackView = UIStackView()
+    private let mainStackView = UIStackView()
+    private let dismissButton = KeyboardAccessoryToolbarView.makeButton(
+        systemName: "keyboard.chevron.compact.down",
+        accessibilityLabel: "Dismiss Keyboard"
+    )
+    private let escapeButton = KeyboardAccessoryToolbarView.makeGlyphButton(
+        "⎋",
+        accessibilityLabel: "Escape",
+        fontSize: 19
+    )
+    private let controlButton = KeyboardAccessoryToolbarView.makeGlyphButton(
+        "⌘",
+        accessibilityLabel: "Control Keys",
+        fontSize: 21
+    )
+    private let editButton = KeyboardAccessoryToolbarView.makeButton(
+        systemName: "scissors",
+        accessibilityLabel: "Edit Commands"
+    )
+    private let undoButton = KeyboardAccessoryToolbarView.makeButton(
+        systemName: "arrow.uturn.backward",
+        accessibilityLabel: "Undo"
+    )
+    private let redoButton = KeyboardAccessoryToolbarView.makeButton(
+        systemName: "arrow.uturn.forward",
+        accessibilityLabel: "Redo"
+    )
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureSubviews()
+        configureActions()
+        updateExpandedPanel(animated: false)
+        updateButtonStates()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: expandedPanel == nil ? 52 : 100)
+    }
+
+    private func configureSubviews() {
+        backgroundColor = .clear
+        autoresizingMask = [.flexibleHeight]
+
+        blurView.translatesAutoresizingMaskIntoConstraints = false
+        blurView.layer.cornerRadius = 26
+        blurView.layer.cornerCurve = .continuous
+        blurView.clipsToBounds = true
+        blurView.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+        blurView.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
+        blurView.layer.borderWidth = 0.5
+        addSubview(blurView)
+
+        contentStackView.translatesAutoresizingMaskIntoConstraints = false
+        contentStackView.axis = .vertical
+        contentStackView.alignment = .fill
+        contentStackView.distribution = .fill
+        contentStackView.spacing = 6
+        blurView.contentView.addSubview(contentStackView)
+
+        expandedStackView.translatesAutoresizingMaskIntoConstraints = false
+        expandedStackView.axis = .horizontal
+        expandedStackView.alignment = .center
+        expandedStackView.distribution = .equalSpacing
+        expandedStackView.spacing = 14
+
+        mainStackView.translatesAutoresizingMaskIntoConstraints = false
+        mainStackView.axis = .horizontal
+        mainStackView.alignment = .center
+        mainStackView.distribution = .equalSpacing
+        mainStackView.spacing = 14
+
+        contentStackView.addArrangedSubview(expandedStackView)
+        contentStackView.addArrangedSubview(mainStackView)
+
+        [dismissButton, escapeButton, controlButton, editButton, undoButton, redoButton].forEach { button in
+            mainStackView.addArrangedSubview(button)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 36),
+                button.heightAnchor.constraint(equalToConstant: 36)
+            ])
+        }
+
+        NSLayoutConstraint.activate([
+            blurView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            blurView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            blurView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            blurView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+
+            contentStackView.leadingAnchor.constraint(equalTo: blurView.contentView.leadingAnchor, constant: 16),
+            contentStackView.trailingAnchor.constraint(equalTo: blurView.contentView.trailingAnchor, constant: -16),
+            contentStackView.centerYAnchor.constraint(equalTo: blurView.contentView.centerYAnchor)
+        ])
+    }
+
+    private func configureActions() {
+        dismissButton.addAction(UIAction { [weak self] _ in
+            self?.onDismissTapped()
+        }, for: .touchUpInside)
+
+        escapeButton.addAction(UIAction { [weak self] _ in
+            self?.onEscapeTapped()
+        }, for: .touchUpInside)
+
+        controlButton.addAction(UIAction { [weak self] _ in
+            self?.toggleExpandedPanel(.controls)
+        }, for: .touchUpInside)
+
+        editButton.addAction(UIAction { [weak self] _ in
+            self?.toggleExpandedPanel(.edit)
+        }, for: .touchUpInside)
+
+        undoButton.addAction(UIAction { [weak self] _ in
+            self?.onUndoTapped()
+        }, for: .touchUpInside)
+
+        redoButton.addAction(UIAction { [weak self] _ in
+            self?.onRedoTapped()
+        }, for: .touchUpInside)
+    }
+
+    func collapseExpandedPanel() {
+        setExpandedPanel(nil)
+    }
+
+    private func toggleExpandedPanel(_ panel: ExpandedPanel) {
+        setExpandedPanel(expandedPanel == panel ? nil : panel)
+    }
+
+    private func setExpandedPanel(_ panel: ExpandedPanel?) {
+        guard expandedPanel != panel else { return }
+        expandedPanel = panel
+        updateExpandedPanel(animated: true)
+        invalidateIntrinsicContentSize()
+        onHeightChanged()
+    }
+
+    private func updateExpandedPanel(animated: Bool) {
+        let wasHidden = expandedStackView.isHidden
+        rebuildExpandedRow()
+        updateButtonStates()
+
+        guard animated else {
+            expandedStackView.alpha = expandedPanel == nil ? 0 : 1
+            return
+        }
+
+        if wasHidden, expandedPanel != nil {
+            expandedStackView.alpha = 0
+        }
+
+        UIView.animate(
+            withDuration: 0.18,
+            delay: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut]
+        ) {
+            self.expandedStackView.alpha = self.expandedPanel == nil ? 0 : 1
+            self.layoutIfNeeded()
+        }
+    }
+
+    private func rebuildExpandedRow() {
+        expandedStackView.arrangedSubviews.forEach { view in
+            expandedStackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        modifierButtons.removeAll()
+
+        guard let expandedPanel else {
+            expandedStackView.isHidden = true
+            return
+        }
+
+        expandedStackView.isHidden = false
+
+        switch expandedPanel {
+        case .controls:
+            expandedStackView.distribution = .equalSpacing
+            addExpandedButton(Self.makeGlyphButton("⇥", accessibilityLabel: "Tab", fontSize: 20)) { [weak self] in
+                self?.onTabTapped()
+                self?.collapseExpandedPanel()
+            }
+            addModifierButton("⇧", modifier: .shift, accessibilityLabel: "Shift")
+            addModifierButton("⌃", modifier: .control, accessibilityLabel: "Control")
+            addModifierButton("⌥", modifier: .option, accessibilityLabel: "Option")
+            addModifierButton("⌘", modifier: .command, accessibilityLabel: "Command")
+        case .edit:
+            expandedStackView.distribution = .fill
+            addExpandedButton(Self.makeButton(systemName: "scissors", accessibilityLabel: "Cut")) { [weak self] in
+                self?.onEditCommandTapped(.cut)
+                self?.collapseExpandedPanel()
+            }
+            addExpandedButton(Self.makeButton(systemName: "doc.on.doc", accessibilityLabel: "Copy")) { [weak self] in
+                self?.onEditCommandTapped(.copy)
+                self?.collapseExpandedPanel()
+            }
+            addExpandedButton(Self.makeButton(systemName: "doc.on.clipboard", accessibilityLabel: "Paste")) { [weak self] in
+                self?.onEditCommandTapped(.paste)
+                self?.collapseExpandedPanel()
+            }
+
+            let spacer = UIView()
+            spacer.translatesAutoresizingMaskIntoConstraints = false
+            expandedStackView.addArrangedSubview(spacer)
+
+            addExpandedButton(Self.makeGlyphButton("A", accessibilityLabel: "Select All", fontSize: 18)) { [weak self] in
+                self?.onEditCommandTapped(.selectAll)
+                self?.collapseExpandedPanel()
+            }
+        }
+    }
+
+    private func addModifierButton(
+        _ glyph: String,
+        modifier: RemoteControlMessage.Modifier,
+        accessibilityLabel: String
+    ) {
+        let button = Self.makeGlyphButton(glyph, accessibilityLabel: accessibilityLabel, fontSize: 20)
+        modifierButtons[modifier] = button
+        addExpandedButton(button) { [weak self] in
+            self?.onModifierTapped(modifier)
+        }
+    }
+
+    private func addExpandedButton(_ button: UIButton, action: @escaping () -> Void) {
+        button.addAction(UIAction { _ in
+            action()
+        }, for: .touchUpInside)
+        expandedStackView.addArrangedSubview(button)
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 38),
+            button.heightAnchor.constraint(equalToConstant: 38)
+        ])
+    }
+
+    private func updateButtonStates() {
+        [dismissButton, escapeButton, undoButton, redoButton].forEach {
+            styleButton($0, isActive: false)
+        }
+        styleButton(controlButton, isActive: expandedPanel == .controls || !activeModifiers.isEmpty)
+        styleButton(editButton, isActive: expandedPanel == .edit)
+
+        for (modifier, button) in modifierButtons {
+            styleButton(button, isActive: activeModifiers.contains(modifier))
+        }
+    }
+
+    private func styleButton(_ button: UIButton, isActive: Bool) {
+        let color = isActive ? Self.activeColor : Self.normalColor
+        button.tintColor = color
+        button.setTitleColor(color, for: .normal)
+        button.backgroundColor = .clear
+    }
+
+    private static func makeButton(systemName: String, accessibilityLabel: String) -> UIButton {
+        let configuration = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: systemName, withConfiguration: configuration), for: .normal)
+        button.accessibilityLabel = accessibilityLabel
+        configureButton(button)
+        return button
+    }
+
+    private static func makeGlyphButton(
+        _ glyph: String,
+        accessibilityLabel: String,
+        fontSize: CGFloat
+    ) -> UIButton {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setTitle(glyph, for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: fontSize, weight: .medium)
+        button.accessibilityLabel = accessibilityLabel
+        configureButton(button)
+        return button
+    }
+
+    private static func configureButton(_ button: UIButton) {
+        button.tintColor = normalColor
+        button.setTitleColor(normalColor, for: .normal)
+        button.backgroundColor = .clear
+        button.layer.cornerRadius = 18
+        button.layer.cornerCurve = .continuous
+    }
+
+    private static let normalColor = UIColor.white.withAlphaComponent(0.94)
+    private static let activeColor = UIColor.systemPurple
 }
 
 private final class FallbackWallpaperView: UIView {

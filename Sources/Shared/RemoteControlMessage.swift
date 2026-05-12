@@ -9,6 +9,7 @@ struct RemoteControlMessage: Codable, Equatable {
         case scroll
         case textInput
         case keyPress
+        case keyChord
         case requestWindowList
         case selectWindow
         case startStream
@@ -20,6 +21,13 @@ struct RemoteControlMessage: Codable, Equatable {
         case returnKey
         case tab
         case escape
+    }
+
+    enum Modifier: String, Codable, CaseIterable {
+        case shift
+        case control
+        case option
+        case command
     }
 
     enum ScrollPhase: String, Codable {
@@ -38,6 +46,7 @@ struct RemoteControlMessage: Codable, Equatable {
     var sequenceNumber: UInt64
     var text: String?
     var key: Key?
+    var modifiers: [Modifier]?
     var windowID: UInt32?
     var scrollDeltaX: Double
     var scrollDeltaY: Double
@@ -50,6 +59,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = nil
+        self.modifiers = nil
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
@@ -63,32 +73,63 @@ struct RemoteControlMessage: Codable, Equatable {
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = nil
+        self.modifiers = nil
         self.windowID = nil
         self.scrollDeltaX = Double(delta.x)
         self.scrollDeltaY = Double(delta.y)
         self.scrollPhase = phase
     }
 
-    init(text: String, sequenceNumber: UInt64) {
+    init(text: String, modifiers: [Modifier] = [], sequenceNumber: UInt64) {
         self.kind = .textInput
         self.normalizedX = 0
         self.normalizedY = 0
         self.sequenceNumber = sequenceNumber
         self.text = text
         self.key = nil
+        self.modifiers = modifiers.isEmpty ? nil : modifiers
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
     }
 
-    init(key: Key, sequenceNumber: UInt64) {
+    init(key: Key, modifiers: [Modifier] = [], sequenceNumber: UInt64) {
         self.kind = .keyPress
         self.normalizedX = 0
         self.normalizedY = 0
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = key
+        self.modifiers = modifiers.isEmpty ? nil : modifiers
+        self.windowID = nil
+        self.scrollDeltaX = 0
+        self.scrollDeltaY = 0
+        self.scrollPhase = nil
+    }
+
+    init(keyChordText text: String, modifiers: [Modifier], sequenceNumber: UInt64) {
+        self.kind = .keyChord
+        self.normalizedX = 0
+        self.normalizedY = 0
+        self.sequenceNumber = sequenceNumber
+        self.text = text
+        self.key = nil
+        self.modifiers = modifiers.isEmpty ? nil : modifiers
+        self.windowID = nil
+        self.scrollDeltaX = 0
+        self.scrollDeltaY = 0
+        self.scrollPhase = nil
+    }
+
+    init(keyChordKey key: Key, modifiers: [Modifier], sequenceNumber: UInt64) {
+        self.kind = .keyChord
+        self.normalizedX = 0
+        self.normalizedY = 0
+        self.sequenceNumber = sequenceNumber
+        self.text = nil
+        self.key = key
+        self.modifiers = modifiers.isEmpty ? nil : modifiers
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
@@ -102,6 +143,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = nil
+        self.modifiers = nil
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
@@ -115,6 +157,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = nil
+        self.modifiers = nil
         self.windowID = windowID
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
@@ -128,6 +171,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = nil
+        self.modifiers = nil
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
@@ -141,6 +185,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.sequenceNumber = sequenceNumber
         self.text = nil
         self.key = nil
+        self.modifiers = nil
         self.windowID = nil
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
