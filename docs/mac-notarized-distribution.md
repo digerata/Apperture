@@ -44,12 +44,13 @@ base64 -i DeveloperIDApplication.p12 | pbcopy
 
 Push a release tag, or run **Release Train** manually from GitHub Actions.
 
-Use release tags that match the app version, such as `v0.1.0` or `mac-v0.1.0`. For tag pushes, the workflow checks out that tag, verifies the tag is contained in `origin/master`, verifies the tag version matches `MARKETING_VERSION`, passes the tag into the notarization script, and fails if the tag version does not match the built app's `CFBundleShortVersionString`. For manual runs, provide the optional `release_tag` input if you want the same validation.
+Use release tags that match the app version, such as `v0.1.0`, `mac-v0.1.0`, or `ios-v0.1.0`. For tag pushes, the workflow checks out that tag, verifies the tag is contained in `origin/master`, verifies the tag version matches `MARKETING_VERSION`, passes the tag into the notarization script, and fails if the tag version does not match the built app's `CFBundleShortVersionString`. For manual runs, provide the optional `release_tag` input if you want the same validation.
 
 Tag behavior:
 
 - `v0.1.0`: full release train. Builds the notarized Mac DMG, uploads the iOS app to TestFlight, and creates/updates the GitHub Release with Mac assets.
 - `mac-v0.1.0`: Mac-only escape hatch. Builds the notarized Mac DMG and creates/updates the GitHub Release, but skips iOS TestFlight.
+- `ios-v0.1.0`: iOS-only escape hatch. Uploads the iOS app to TestFlight, but skips the Mac DMG and GitHub Release assets.
 
 The workflow:
 
@@ -88,10 +89,11 @@ To create the release tag with local safety checks:
 scripts/release train
 ```
 
-That requires a clean `master`, verifies local `master` equals `origin/master`, creates `v<MARKETING_VERSION>`, and pushes the tag. For the Mac-only escape hatch:
+That requires a clean `master`, verifies local `master` equals `origin/master`, creates `v<MARKETING_VERSION>`, and pushes the tag. For platform-only escape hatches:
 
 ```sh
 scripts/release mac
+scripts/release ios
 ```
 
 ## Local Release
