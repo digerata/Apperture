@@ -63,6 +63,8 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 	<string>app-store-connect</string>
 	<key>signingStyle</key>
 	<string>automatic</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
 	<key>teamID</key>
 	<string>$TEAM_ID</string>
 </dict>
@@ -85,6 +87,8 @@ xcodebuild archive \
   -allowProvisioningUpdates \
   "${XCODE_AUTH_ARGS[@]}" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
+  CODE_SIGN_STYLE=Automatic \
+  CODE_SIGN_IDENTITY="Apple Distribution" \
   PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID"
 
 echo "Exporting IPA..."
