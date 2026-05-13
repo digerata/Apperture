@@ -57,8 +57,16 @@ final class HostModel: ObservableObject {
                 }
             },
             clipboardHandler: { [weak self] message in
-                Task { @MainActor in
-                    self?.handleRemoteClipboard(message)
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self?.handleRemoteClipboard(message)
+                    }
+                } else {
+                    DispatchQueue.main.sync {
+                        MainActor.assumeIsolated {
+                            self?.handleRemoteClipboard(message)
+                        }
+                    }
                 }
             },
             pairingRequestHandler: { [weak self] connectionID, request, endpoint in

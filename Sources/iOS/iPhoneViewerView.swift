@@ -202,6 +202,8 @@ final class iPhoneViewerViewController: UIViewController {
     private var hasPendingSelectedStreamFrame = false
     private var isAwaitingWindowList = false
     private var isPresentingAppLauncher = false
+    private var isShowingHostSelection = false
+    private var isShowingAppSelection = false
     private var appLauncherPresentationGeneration = 0
     private var currentSelectedWindowID: UInt32?
     private var currentSelectedWindow: RemoteWindowSummary?
@@ -312,7 +314,7 @@ final class iPhoneViewerViewController: UIViewController {
 
         let mirrorLeadingConstraint = mirrorCanvasView.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         let mirrorTrailingConstraint = mirrorCanvasView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-        let mirrorTopConstraint = mirrorCanvasView.topAnchor.constraint(equalTo: view.topAnchor, constant: 76)
+        let mirrorTopConstraint = mirrorCanvasView.topAnchor.constraint(equalTo: view.topAnchor, constant: 24)
         let mirrorBottomConstraint = mirrorCanvasView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8)
         let developerActivityTopConstraint = developerActivityBannerView.topAnchor.constraint(
             equalTo: view.safeAreaLayoutGuide.topAnchor,
@@ -388,8 +390,8 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func configureCallbacks() {
-        mirrorCanvasView.onPointerEvent = { [weak self] kind, point in
-            self?.sendPointerEvent(kind: kind, point: point)
+        mirrorCanvasView.onPointerEvent = { [weak self] kind, point, clickCount in
+            self?.sendPointerEvent(kind: kind, point: point, clickCount: clickCount)
         }
         mirrorCanvasView.onScrollEvent = { [weak self] point, delta, phase in
             self?.sendScrollEvent(point: point, delta: delta, phase: phase)
@@ -578,6 +580,14 @@ final class iPhoneViewerViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] message in
                 self?.hostConnectionView.pairingStatusMessage = message
+            }
+            .store(in: &cancellables)
+
+        streamClient.$hostDisconnectNotice
+            .receive(on: DispatchQueue.main)
+            .compactMap { $0 }
+            .sink { [weak self] notice in
+                self?.presentHostDisconnectAlert(notice)
             }
             .store(in: &cancellables)
 
@@ -825,7 +835,7 @@ final class iPhoneViewerViewController: UIViewController {
         pendingResumeTarget = nil
         resumeDeadlineWorkItem?.cancel()
 
-        if window.id == currentSelectedWindowID {
+        if isWindowAlreadyStreaming(window) {
             currentSelectedWindow = window
             loadingInterstitialView.setVisible(false, animated: view.window != nil)
             updateFlowOverlays()
@@ -850,14 +860,15 @@ final class iPhoneViewerViewController: UIViewController {
         updateFlowOverlays()
     }
 
-    private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint) {
+    private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint, clickCount: Int = 1) {
         nextSequenceNumber += 1
         streamClient.send(
             RemoteControlMessage(
                 kind: kind,
                 normalizedX: Double(point.x),
                 normalizedY: Double(point.y),
-                sequenceNumber: nextSequenceNumber
+                sequenceNumber: nextSequenceNumber,
+                clickCount: clickCount
             )
         )
     }
@@ -947,6 +958,8 @@ final class iPhoneViewerViewController: UIViewController {
 
     private func updateFlowOverlays() {
         if pendingResumeTarget != nil {
+            isShowingHostSelection = false
+            isShowingAppSelection = false
             hostConnectionView.setVisible(false, animated: view.window != nil)
             appLauncherView.setVisible(false, animated: view.window != nil)
             loadingInterstitialView.setVisible(true, animated: view.window != nil)
@@ -968,6 +981,8 @@ final class iPhoneViewerViewController: UIViewController {
         }
 
         if isWaitingForSelectedStream {
+            isShowingHostSelection = false
+            isShowingAppSelection = false
             hostConnectionView.setVisible(false, animated: view.window != nil)
             if !isDismissingLauncherForSelectedStream {
                 appLauncherView.setVisible(false, animated: view.window != nil)
@@ -982,6 +997,8 @@ final class iPhoneViewerViewController: UIViewController {
         }
 
         if isPresentingAppLauncher {
+            isShowingHostSelection = false
+            isShowingAppSelection = false
             hostConnectionView.setVisible(false, animated: view.window != nil)
             appLauncherView.setVisible(false, animated: view.window != nil)
             loadingInterstitialView.setVisible(false, animated: view.window != nil)
@@ -1014,11 +1031,26 @@ final class iPhoneViewerViewController: UIViewController {
             }
         }
 
+        dismissKeyboardIfReturningToSelection(
+            showsHosts: shouldShowHosts,
+            showsApps: shouldShowApps
+        )
         hostConnectionView.setVisible(shouldShowHosts, animated: view.window != nil)
         appLauncherView.setVisible(shouldShowApps, animated: view.window != nil)
         loadingInterstitialView.setVisible(false, animated: view.window != nil)
         mirrorCanvasView.alpha = shouldShowApps ? 0 : 1
         mirrorCanvasView.isUserInteractionEnabled = !shouldShowApps
+        isShowingHostSelection = shouldShowHosts
+        isShowingAppSelection = shouldShowApps
+    }
+
+    private func dismissKeyboardIfReturningToSelection(showsHosts: Bool, showsApps: Bool) {
+        let isReturningToHostSelection = showsHosts && !isShowingHostSelection
+        let isReturningToAppSelection = showsApps && !isShowingAppSelection
+        guard isReturningToHostSelection || isReturningToAppSelection else { return }
+
+        isKeyboardPresented = false
+        view.endEditing(true)
     }
 
     private func presentAppLauncherFromToolbar() {
@@ -1068,6 +1100,9 @@ final class iPhoneViewerViewController: UIViewController {
         loadingInterstitialView.setVisible(false, animated: view.window != nil)
         appLauncherView.setVisible(false, animated: animated && view.window != nil)
         mirrorCanvasView.alpha = 1
+        if animated {
+            mirrorCanvasView.revealDeferredContentArrivalForAppSwitch()
+        }
         mirrorCanvasView.isUserInteractionEnabled = true
         updateFlowOverlays()
     }
@@ -1084,7 +1119,7 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func selectWindow(_ window: RemoteWindowSummary) {
-        if window.id == currentSelectedWindowID {
+        if isWindowAlreadyStreaming(window) {
             currentSelectedWindow = window
             rememberAppSelection(window)
             dismissAppLauncherToCurrentApp(animated: true)
@@ -1119,6 +1154,12 @@ final class iPhoneViewerViewController: UIViewController {
                 self.updateFlowOverlays()
             }
         }
+    }
+
+    private func isWindowAlreadyStreaming(_ window: RemoteWindowSummary) -> Bool {
+        guard window.id == currentSelectedWindowID else { return false }
+        guard case .live = streamClient.state else { return false }
+        return true
     }
 
     private func handleSelectedStreamFrameReady() {
@@ -1243,7 +1284,7 @@ final class iPhoneViewerViewController: UIViewController {
         let keyboardOnlyLift = max(0, keyboardLift - keyboardInputView.accessoryHeight)
         mirrorLeadingConstraint?.constant = isLandscape ? max(16, view.safeAreaInsets.left + 16) : 0
         mirrorTrailingConstraint?.constant = isLandscape ? -max(16, view.safeAreaInsets.right + 16) : 0
-        mirrorTopConstraint?.constant = isLandscape ? -keyboardLift : 76
+        mirrorTopConstraint?.constant = isLandscape ? -keyboardLift : 24
         mirrorBottomConstraint?.constant = isLandscape ? -keyboardLift : -keyboardOnlyLift
         developerActivityTopConstraint?.constant = isLandscape ? 12 : 72
         developerActivityLeadingConstraint?.constant = isLandscape ? max(84, view.safeAreaInsets.left + 84) : 16
@@ -1283,6 +1324,36 @@ final class iPhoneViewerViewController: UIViewController {
         let alert = UIAlertController(title: "Cannot Connect", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
+    }
+
+    private func presentHostDisconnectAlert(_ notice: RemoteHostDisconnectNotice) {
+        guard view.window != nil else { return }
+
+        let alert = UIAlertController(
+            title: "Host Disconnected",
+            message: "\(notice.hostName) disconnected.\n\n\(notice.message)",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+
+        if let presentedViewController = topmostPresentedViewController(),
+           presentedViewController is UIAlertController {
+            presentedViewController.dismiss(animated: true) { [weak self] in
+                self?.present(alert, animated: true)
+            }
+        } else if let presentedViewController = topmostPresentedViewController() {
+            presentedViewController.present(alert, animated: true)
+        } else {
+            present(alert, animated: true)
+        }
+    }
+
+    private func topmostPresentedViewController() -> UIViewController? {
+        var topmost = presentedViewController
+        while let next = topmost?.presentedViewController {
+            topmost = next
+        }
+        return topmost
     }
 
     private func presentConnectionDiagnostics() {
@@ -2090,8 +2161,13 @@ private final class AppLauncherOverlayView: UIView {
             return
         }
 
+        let shouldPrimePresentationTransform = visible && (isHidden || alpha == 0)
+
         if visible {
             isHidden = false
+            if shouldPrimePresentationTransform {
+                panelView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+            }
             prepareCollectionForInteraction()
         } else {
             hideWindowChooser(animated: false)
@@ -2099,11 +2175,13 @@ private final class AppLauncherOverlayView: UIView {
 
         let updates = {
             self.alpha = visible ? 1 : 0
+            self.panelView.transform = visible ? .identity : CGAffineTransform(scaleX: 0.94, y: 0.94)
         }
 
         let animationCompletion: (Bool) -> Void = { _ in
             guard generation == self.visibilityGeneration else { return }
             self.isHidden = !visible
+            self.panelView.transform = visible ? .identity : CGAffineTransform(scaleX: 0.94, y: 0.94)
             if visible {
                 self.prepareCollectionForInteraction()
             }
@@ -2592,6 +2670,14 @@ private final class AppLauncherCell: UICollectionViewCell {
 }
 
 private final class ViewerToolbarView: UIView {
+    private static let buttonFrameSize: CGFloat = 34
+    private static let symbolPointSize: CGFloat = 17
+    private static let buttonSpacing: CGFloat = 20
+    private static let edgeInset: CGFloat = 16
+    private static let portraitTopCenterY: CGFloat = 32
+    private static let statusDotSize: CGFloat = 6
+    private static let statusDotInset: CGFloat = 5
+
     var streamState: RemoteFrameStreamState = .idle {
         didSet {
             updateStatusColor()
@@ -2660,16 +2746,16 @@ private final class ViewerToolbarView: UIView {
         addSubview(settingsButton)
 
         statusDotView.translatesAutoresizingMaskIntoConstraints = false
-        statusDotView.layer.cornerRadius = 4
+        statusDotView.layer.cornerRadius = Self.statusDotSize / 2
         statusDotView.layer.borderWidth = 1
         statusDotView.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
         settingsButton.addSubview(statusDotView)
 
         NSLayoutConstraint.activate([
-            statusDotView.leadingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: 8),
-            statusDotView.topAnchor.constraint(equalTo: settingsButton.topAnchor, constant: 8),
-            statusDotView.widthAnchor.constraint(equalToConstant: 8),
-            statusDotView.heightAnchor.constraint(equalToConstant: 8)
+            statusDotView.leadingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: Self.statusDotInset),
+            statusDotView.topAnchor.constraint(equalTo: settingsButton.topAnchor, constant: Self.statusDotInset),
+            statusDotView.widthAnchor.constraint(equalToConstant: Self.statusDotSize),
+            statusDotView.heightAnchor.constraint(equalToConstant: Self.statusDotSize)
         ])
     }
 
@@ -2691,26 +2777,23 @@ private final class ViewerToolbarView: UIView {
 
         if usesLandscapeLayout {
             let islandSide = dynamicIslandSide()
-            let edgeInset: CGFloat = 20
-            let edgeButtonFrameSize: CGFloat = 44
-            let buttonSpacing: CGFloat = 8
             let rotationAngle: CGFloat = islandSide == .left ? .pi / 2 : -.pi / 2
-            let edgeCenterOffset = edgeInset + edgeButtonFrameSize / 2
+            let edgeCenterOffset = Self.edgeInset + Self.buttonFrameSize / 2
 
             UIView.performWithoutAnimation {
                 [exitButton, keyboardButton, settingsButton].forEach { button in
-                    button.bounds = CGRect(origin: .zero, size: CGSize(width: edgeButtonFrameSize, height: edgeButtonFrameSize))
+                    button.bounds = CGRect(origin: .zero, size: CGSize(width: Self.buttonFrameSize, height: Self.buttonFrameSize))
                 }
 
                 switch islandSide {
                 case .left:
                     exitButton.center = CGPoint(x: edgeCenterOffset, y: bounds.height - edgeCenterOffset)
                     settingsButton.center = CGPoint(x: edgeCenterOffset, y: edgeCenterOffset)
-                    keyboardButton.center = CGPoint(x: edgeCenterOffset, y: edgeCenterOffset + edgeButtonFrameSize + buttonSpacing)
+                    keyboardButton.center = CGPoint(x: edgeCenterOffset, y: edgeCenterOffset + Self.buttonFrameSize + Self.buttonSpacing)
                 case .right:
                     let x = bounds.width - edgeCenterOffset
                     exitButton.center = CGPoint(x: x, y: edgeCenterOffset)
-                    keyboardButton.center = CGPoint(x: x, y: bounds.height - edgeCenterOffset - edgeButtonFrameSize - buttonSpacing)
+                    keyboardButton.center = CGPoint(x: x, y: bounds.height - edgeCenterOffset - Self.buttonFrameSize - Self.buttonSpacing)
                     settingsButton.center = CGPoint(x: x, y: bounds.height - edgeCenterOffset)
                 }
             }
@@ -2719,15 +2802,19 @@ private final class ViewerToolbarView: UIView {
             keyboardButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
             settingsButton.transform = CGAffineTransform(rotationAngle: rotationAngle)
         } else {
-            let edgeButtonFrameSize: CGFloat = 44
             UIView.performWithoutAnimation {
                 [exitButton, keyboardButton, settingsButton].forEach { button in
-                    button.bounds = CGRect(origin: .zero, size: CGSize(width: edgeButtonFrameSize, height: edgeButtonFrameSize))
+                    button.bounds = CGRect(origin: .zero, size: CGSize(width: Self.buttonFrameSize, height: Self.buttonFrameSize))
                 }
 
-                exitButton.center = CGPoint(x: 42, y: 42)
-                keyboardButton.center = CGPoint(x: bounds.width - 94, y: 42)
-                settingsButton.center = CGPoint(x: bounds.width - 42, y: 42)
+                let edgeCenterX = Self.edgeInset + Self.buttonFrameSize / 2
+                let trailingSettingsCenterX = bounds.width - edgeCenterX
+                exitButton.center = CGPoint(x: edgeCenterX, y: Self.portraitTopCenterY)
+                settingsButton.center = CGPoint(x: trailingSettingsCenterX, y: Self.portraitTopCenterY)
+                keyboardButton.center = CGPoint(
+                    x: trailingSettingsCenterX - Self.buttonFrameSize - Self.buttonSpacing,
+                    y: Self.portraitTopCenterY
+                )
             }
 
             exitButton.transform = .identity
@@ -2874,27 +2961,39 @@ private final class ViewerToolbarView: UIView {
     }
 
     private static func makeButton(systemName: String) -> UIButton {
-        let button = UIButton(type: .system)
+        let button = ViewerToolbarButton(type: .system)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.tintColor = .white
         button.backgroundColor = UIColor.black.withAlphaComponent(0.18)
-        button.layer.cornerRadius = 22
+        button.layer.cornerRadius = Self.buttonFrameSize / 2
         button.layer.cornerCurve = .continuous
         button.setImage(UIImage(systemName: systemName), for: .normal)
         button.contentVerticalAlignment = .center
         button.contentHorizontalAlignment = .center
         button.imageView?.contentMode = .scaleAspectFit
         button.setPreferredSymbolConfiguration(
-            UIImage.SymbolConfiguration(pointSize: 22, weight: .medium),
+            UIImage.SymbolConfiguration(pointSize: Self.symbolPointSize, weight: .medium),
             forImageIn: .normal
         )
 
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 44),
-            button.heightAnchor.constraint(equalToConstant: 44)
+            button.widthAnchor.constraint(equalToConstant: Self.buttonFrameSize),
+            button.heightAnchor.constraint(equalToConstant: Self.buttonFrameSize)
         ])
 
         return button
+    }
+}
+
+private final class ViewerToolbarButton: UIButton {
+    private let minimumHitTarget: CGFloat = 44
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let horizontalInset = min(0, (bounds.width - minimumHitTarget) / 2)
+        let verticalInset = min(0, (bounds.height - minimumHitTarget) / 2)
+        return bounds
+            .insetBy(dx: horizontalInset, dy: verticalInset)
+            .contains(point)
     }
 }
 
@@ -3051,7 +3150,7 @@ private final class MirrorCanvasView: UIView {
         animateContentArrival()
     }
 
-    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
+    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint, Int) -> Void = { _, _, _ in }
     var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private let scrollView = TwoFingerScrollView()
@@ -3073,7 +3172,9 @@ private final class MirrorCanvasView: UIView {
     private var pendingTransitionStyle: MirrorContentTransitionStyle = .normal
     private var nextSwitchDirection: CGFloat = 1
     private var transitionGeneration = 0
-    private let viewportPadding: CGFloat = 16
+    private let minimumViewportPadding: CGFloat = 16
+    private let renderShadowRadius: CGFloat = 24
+    private let renderShadowOffset = CGSize(width: 0, height: 12)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -3114,9 +3215,9 @@ private final class MirrorCanvasView: UIView {
         shadowView.isUserInteractionEnabled = false
         shadowView.backgroundColor = .clear
         shadowView.layer.shadowColor = UIColor.black.cgColor
-        shadowView.layer.shadowOpacity = 0.28
-        shadowView.layer.shadowRadius = 18
-        shadowView.layer.shadowOffset = CGSize(width: 0, height: 10)
+        shadowView.layer.shadowOpacity = 0.42
+        shadowView.layer.shadowRadius = renderShadowRadius
+        shadowView.layer.shadowOffset = renderShadowOffset
         shadowView.layer.shouldRasterize = true
         shadowView.layer.rasterizationScale = UIScreen.main.scale
 
@@ -3132,8 +3233,8 @@ private final class MirrorCanvasView: UIView {
         imageView.layer.cornerCurve = .continuous
         imageView.isUserInteractionEnabled = false
 
-        pointerSurfaceView.onPointerEvent = { [weak self] kind, point in
-            self?.onPointerEvent(kind, point)
+        pointerSurfaceView.onPointerEvent = { [weak self] kind, point, clickCount in
+            self?.onPointerEvent(kind, point, clickCount)
         }
         pointerSurfaceView.onScrollEvent = { [weak self] point, delta, phase in
             self?.onScrollEvent(point, delta, phase)
@@ -3189,13 +3290,14 @@ private final class MirrorCanvasView: UIView {
         let previousContentSize = scrollView.contentSize
         let previousOffset = scrollView.contentOffset
         let size = renderedSize
+        let insets = viewportInsets
         let contentSize = CGSize(
-            width: scrollsHorizontally ? max(bounds.width, size.width + viewportPadding * 2) : bounds.width,
-            height: scrollsVertically ? max(bounds.height, size.height + viewportPadding * 2) : bounds.height
+            width: scrollsHorizontally ? max(bounds.width, size.width + insets.left + insets.right) : bounds.width,
+            height: scrollsVertically ? max(bounds.height, size.height + insets.top + insets.bottom) : bounds.height
         )
         let frame = CGRect(
-            x: scrollsHorizontally ? viewportPadding : (contentSize.width - size.width) / 2,
-            y: scrollsVertically ? viewportPadding : (contentSize.height - size.height) / 2,
+            x: scrollsHorizontally ? insets.left : (contentSize.width - size.width) / 2,
+            y: scrollsVertically ? insets.top : (contentSize.height - size.height) / 2,
             width: size.width,
             height: size.height
         )
@@ -3210,23 +3312,12 @@ private final class MirrorCanvasView: UIView {
         scrollView.isDirectionalLockEnabled = true
         contentView.frame = CGRect(origin: .zero, size: contentSize)
         renderPivotView.bounds = CGRect(origin: .zero, size: frame.size)
-        renderPivotView.layer.anchorPoint = CGPoint(x: 0.5, y: 1)
-        renderPivotView.layer.position = CGPoint(x: frame.midX, y: frame.maxY)
         renderSurfaceView.bounds = renderPivotView.bounds
-        renderSurfaceView.layer.position = CGPoint(
-            x: renderPivotView.bounds.midX,
-            y: renderPivotView.bounds.midY
-        )
         shadowView.frame = renderSurfaceView.bounds
         videoRenderView.frame = renderSurfaceView.bounds
         imageView.frame = renderSurfaceView.bounds
-        updateImageMask()
         pointerSurfaceView.frame = contentView.bounds
         pointerSurfaceView.imageFrame = hasContent ? frame : nil
-
-        updateShadowPathIfNeeded()
-
-        CATransaction.commit()
 
         let shouldResetOffset = resetOffsetIfNeeded || previousContentSize == .zero
         if shouldResetOffset {
@@ -3237,6 +3328,33 @@ private final class MirrorCanvasView: UIView {
                 animated: false
             )
         }
+
+        updateRenderAnimationAnchor(for: frame)
+        updateImageMask()
+        updateShadowPathIfNeeded()
+
+        CATransaction.commit()
+    }
+
+    private func updateRenderAnimationAnchor(for frame: CGRect) {
+        guard frame.width > 0, frame.height > 0, bounds.width > 0, bounds.height > 0 else { return }
+
+        let visibleCenterX = scrollView.contentOffset.x + bounds.midX
+        let anchorX = min(max((visibleCenterX - frame.minX) / frame.width, 0), 1)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        renderPivotView.layer.anchorPoint = CGPoint(x: anchorX, y: 1)
+        renderPivotView.layer.position = CGPoint(
+            x: frame.minX + frame.width * anchorX,
+            y: frame.maxY
+        )
+        renderSurfaceView.layer.anchorPoint = CGPoint(x: anchorX, y: 0.5)
+        renderSurfaceView.layer.position = CGPoint(
+            x: renderPivotView.bounds.width * anchorX,
+            y: renderPivotView.bounds.midY
+        )
+        CATransaction.commit()
     }
 
     private func updateImageMask() {
@@ -3301,6 +3419,7 @@ private final class MirrorCanvasView: UIView {
         let style = pendingTransitionStyle
         let reducedMotion = UIAccessibility.isReduceMotionEnabled
 
+        updateRenderAnimationAnchor(for: imageFrame)
         renderPivotView.isHidden = false
         renderSurfaceView.isHidden = false
         applyLayerState(
@@ -3344,6 +3463,7 @@ private final class MirrorCanvasView: UIView {
         let reducedMotion = UIAccessibility.isReduceMotionEnabled
 
         isAnimatingDeparture = true
+        updateRenderAnimationAnchor(for: imageFrame)
         applyLayerState(
             to: renderPivotView,
             alpha: renderPivotView.alpha,
@@ -3498,19 +3618,21 @@ private final class MirrorCanvasView: UIView {
         ViewerGeometry.renderedSize(
             sourceSize: sourceSize,
             availableSize: bounds.size,
-            layoutMode: layoutMode
+            layoutMode: layoutMode,
+            viewportInsets: viewportInsets
         )
     }
 
     private var imageFrame: CGRect {
         let size = renderedSize
+        let insets = viewportInsets
         let contentSize = CGSize(
-            width: scrollsHorizontally ? max(bounds.width, size.width + viewportPadding * 2) : bounds.width,
-            height: scrollsVertically ? max(bounds.height, size.height + viewportPadding * 2) : bounds.height
+            width: scrollsHorizontally ? max(bounds.width, size.width + insets.left + insets.right) : bounds.width,
+            height: scrollsVertically ? max(bounds.height, size.height + insets.top + insets.bottom) : bounds.height
         )
         return CGRect(
-            x: scrollsHorizontally ? viewportPadding : (contentSize.width - size.width) / 2,
-            y: scrollsVertically ? viewportPadding : (contentSize.height - size.height) / 2,
+            x: scrollsHorizontally ? insets.left : (contentSize.width - size.width) / 2,
+            y: scrollsVertically ? insets.top : (contentSize.height - size.height) / 2,
             width: size.width,
             height: size.height
         )
@@ -3538,6 +3660,27 @@ private final class MirrorCanvasView: UIView {
 
     private var fallbackRenderCornerRadius: CGFloat {
         8
+    }
+
+    private var viewportInsets: UIEdgeInsets {
+        let horizontalPadding = max(
+            minimumViewportPadding,
+            ceil(renderShadowRadius + abs(renderShadowOffset.width) + 4)
+        )
+        let topPadding = max(
+            minimumViewportPadding,
+            ceil(renderShadowRadius + max(-renderShadowOffset.height, 0) + 4)
+        )
+        let bottomPadding = max(
+            minimumViewportPadding,
+            ceil(renderShadowRadius + max(renderShadowOffset.height, 0) + 4)
+        )
+        return UIEdgeInsets(
+            top: topPadding,
+            left: horizontalPadding,
+            bottom: bottomPadding,
+            right: horizontalPadding
+        )
     }
 
     private var scrollsHorizontally: Bool {
@@ -3575,6 +3718,7 @@ extension MirrorCanvasView: UIScrollViewDelegate {
             scrollView.contentOffset = axisLockedOffset
         }
 
+        updateRenderAnimationAnchor(for: imageFrame)
         pointerSurfaceView.cancelPointerIfNeeded()
     }
 }
@@ -3635,7 +3779,7 @@ private final class VideoRenderView: UIView {
 private final class PointerSurfaceView: UIView {
     var imageFrame: CGRect?
     var usesTouchDragForSingleFingerPan = false
-    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
+    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint, Int) -> Void = { _, _, _ in }
     var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private enum PointerIntent {
@@ -3694,7 +3838,7 @@ private final class PointerSurfaceView: UIView {
 
         if usesTouchDragForSingleFingerPan {
             pointerIntent = .dragging
-            onPointerEvent(.pointerDown, point)
+            onPointerEvent(.pointerDown, point, 1)
             return
         }
 
@@ -3722,7 +3866,7 @@ private final class PointerSurfaceView: UIView {
             holdDownWorkItem = nil
             if usesTouchDragForSingleFingerPan {
                 let startPoint = initialPointerPoint ?? point
-                onPointerEvent(.pointerDown, startPoint)
+                onPointerEvent(.pointerDown, startPoint, 1)
                 pointerIntent = .dragging
                 fallthrough
             } else {
@@ -3734,7 +3878,7 @@ private final class PointerSurfaceView: UIView {
         case .dragging:
             guard shouldSendMove(to: point) else { return }
             lastPointerPoint = point
-            onPointerEvent(.pointerMove, point)
+            onPointerEvent(.pointerMove, point, 1)
         }
     }
 
@@ -3754,8 +3898,9 @@ private final class PointerSurfaceView: UIView {
             break
         case .pendingTap:
             if let point {
-                onPointerEvent(.pointerDown, point)
-                onPointerEvent(.pointerUp, point)
+                let clickCount = min(max(touches.first?.tapCount ?? 1, 1), 2)
+                onPointerEvent(.pointerDown, point, clickCount)
+                onPointerEvent(.pointerUp, point, clickCount)
             }
         case .scrolling:
             if let point {
@@ -3764,7 +3909,7 @@ private final class PointerSurfaceView: UIView {
             }
         case .dragging:
             if let point {
-                onPointerEvent(.pointerUp, point)
+                onPointerEvent(.pointerUp, point, 1)
             }
         }
 
@@ -3781,7 +3926,7 @@ private final class PointerSurfaceView: UIView {
         stopScrollMomentum()
 
         if case .dragging = pointerIntent, let lastPointerPoint {
-            onPointerEvent(.pointerUp, lastPointerPoint)
+            onPointerEvent(.pointerUp, lastPointerPoint, 1)
         }
 
         if case .scrolling = pointerIntent, hasSentScrollBegin, let lastScrollPoint {
@@ -3799,7 +3944,7 @@ private final class PointerSurfaceView: UIView {
         holdDownWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, case .pendingTap = self.pointerIntent else { return }
-            self.onPointerEvent(.pointerDown, point)
+            self.onPointerEvent(.pointerDown, point, 1)
             self.pointerIntent = .dragging
         }
         holdDownWorkItem = workItem
@@ -4491,9 +4636,14 @@ private final class FallbackWallpaperView: UIView {
 }
 
 private enum ViewerGeometry {
-    static func renderedSize(sourceSize: CGSize, availableSize: CGSize, layoutMode: MirrorLayoutMode) -> CGSize {
-        let maxWidth = max(availableSize.width - 32, 1)
-        let maxHeight = max(availableSize.height - 32, 1)
+    static func renderedSize(
+        sourceSize: CGSize,
+        availableSize: CGSize,
+        layoutMode: MirrorLayoutMode,
+        viewportInsets: UIEdgeInsets = UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+    ) -> CGSize {
+        let maxWidth = max(availableSize.width - viewportInsets.left - viewportInsets.right, 1)
+        let maxHeight = max(availableSize.height - viewportInsets.top - viewportInsets.bottom, 1)
         let fitWidthScale = maxWidth / sourceSize.width
         let fitHeightScale = maxHeight / sourceSize.height
 

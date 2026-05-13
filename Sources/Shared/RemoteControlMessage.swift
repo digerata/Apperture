@@ -51,8 +51,9 @@ struct RemoteControlMessage: Codable, Equatable {
     var scrollDeltaX: Double
     var scrollDeltaY: Double
     var scrollPhase: ScrollPhase?
+    var clickCount: Int?
 
-    init(kind: Kind, normalizedX: Double, normalizedY: Double, sequenceNumber: UInt64) {
+    init(kind: Kind, normalizedX: Double, normalizedY: Double, sequenceNumber: UInt64, clickCount: Int = 1) {
         self.kind = kind
         self.normalizedX = min(max(normalizedX, 0), 1)
         self.normalizedY = min(max(normalizedY, 0), 1)
@@ -64,6 +65,11 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        if kind == .pointerDown || kind == .pointerUp {
+            self.clickCount = min(max(clickCount, 1), 2)
+        } else {
+            self.clickCount = nil
+        }
     }
 
     init(scrollAt point: CGPoint, delta: CGPoint, phase: ScrollPhase, sequenceNumber: UInt64) {
@@ -78,6 +84,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = Double(delta.x)
         self.scrollDeltaY = Double(delta.y)
         self.scrollPhase = phase
+        self.clickCount = nil
     }
 
     init(text: String, modifiers: [Modifier] = [], sequenceNumber: UInt64) {
@@ -92,6 +99,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(key: Key, modifiers: [Modifier] = [], sequenceNumber: UInt64) {
@@ -106,6 +114,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(keyChordText text: String, modifiers: [Modifier], sequenceNumber: UInt64) {
@@ -120,6 +129,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(keyChordKey key: Key, modifiers: [Modifier], sequenceNumber: UInt64) {
@@ -134,6 +144,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(requestWindowListWithSequenceNumber sequenceNumber: UInt64) {
@@ -148,6 +159,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(selectWindowID windowID: UInt32, sequenceNumber: UInt64) {
@@ -162,6 +174,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(startStreamWithSequenceNumber sequenceNumber: UInt64) {
@@ -176,6 +189,7 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 
     init(requestKeyFrameWithSequenceNumber sequenceNumber: UInt64) {
@@ -190,5 +204,6 @@ struct RemoteControlMessage: Codable, Equatable {
         self.scrollDeltaX = 0
         self.scrollDeltaY = 0
         self.scrollPhase = nil
+        self.clickCount = nil
     }
 }

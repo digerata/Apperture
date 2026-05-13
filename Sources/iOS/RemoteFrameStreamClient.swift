@@ -20,6 +20,7 @@ final class RemoteFrameStreamClient: ObservableObject {
     @Published private(set) var pairingManager = IOSPairingManager()
     @Published private(set) var pairingStatusMessage: String?
     @Published private(set) var remoteClipboard: RemoteClipboardMessage?
+    @Published private(set) var hostDisconnectNotice: RemoteHostDisconnectNotice?
     let videoSampleBuffers = PassthroughSubject<CMSampleBuffer, Never>()
     var currentHostID: String? { activeCandidateID }
 
@@ -1016,6 +1017,8 @@ final class RemoteFrameStreamClient: ObservableObject {
     }
 
     private func handleConnectionFailure(_ message: String) {
+        let previousState = state
+        let previousHostName = connectedHostName
         let wasPairingConnection = activeCandidateID?.hasPrefix("pairing-") == true
         let failedCandidateID = activeCandidateID
         let wasManualSelection = failedCandidateID == manuallySelectedHostID
@@ -1047,6 +1050,11 @@ final class RemoteFrameStreamClient: ObservableObject {
         }
         consecutiveConnectionFailures += 1
         recordDiagnosticEvent("Connection failed: \(message)")
+        publishHostDisconnectNoticeIfNeeded(
+            previousState: previousState,
+            hostName: previousHostName,
+            message: message
+        )
 
         guard browser != nil else {
             state = .failed(message)
@@ -1080,6 +1088,19 @@ final class RemoteFrameStreamClient: ObservableObject {
             ? .searching
             : .failed(message)
         scheduleRetry()
+    }
+
+    private func publishHostDisconnectNoticeIfNeeded(
+        previousState: RemoteFrameStreamState,
+        hostName: String?,
+        message: String
+    ) {
+        guard previousState.hasEstablishedHostConnection else { return }
+
+        hostDisconnectNotice = RemoteHostDisconnectNotice(
+            hostName: hostName ?? previousState.hostName ?? "Mac",
+            message: message
+        )
     }
 
     private func scheduleRetry() {
@@ -1410,6 +1431,30 @@ enum RemoteFrameStreamState: Equatable {
         }
         return false
     }
+
+    var hasEstablishedHostConnection: Bool {
+        switch self {
+        case .connected, .live:
+            return true
+        case .idle, .searching, .connecting, .failed:
+            return false
+        }
+    }
+
+    var hostName: String? {
+        switch self {
+        case .connecting(let host), .connected(let host), .live(let host):
+            return host
+        case .idle, .searching, .failed:
+            return nil
+        }
+    }
+}
+
+struct RemoteHostDisconnectNotice: Equatable {
+    let id = UUID()
+    var hostName: String
+    var message: String
 }
 
 struct RemoteHostSummary: Equatable, Identifiable {

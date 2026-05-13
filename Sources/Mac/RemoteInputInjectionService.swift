@@ -14,11 +14,11 @@ final class RemoteInputInjectionService {
         case .pointerDown:
             prepareTargetForPointerDown(currentWindow, at: point)
             isPointerDown = true
-            postMouseEvent(type: .leftMouseDown, at: point, clickState: 1)
+            postMouseEvent(type: .leftMouseDown, at: point, clickState: pointerClickState(for: message))
         case .pointerMove:
             postMouseEvent(type: isPointerDown ? .leftMouseDragged : .mouseMoved, at: point, clickState: 0)
         case .pointerUp:
-            postMouseEvent(type: .leftMouseUp, at: point, clickState: 1)
+            postMouseEvent(type: .leftMouseUp, at: point, clickState: pointerClickState(for: message))
             isPointerDown = false
         case .scroll:
             prepareTargetForScroll(currentWindow, at: point)
@@ -49,6 +49,10 @@ final class RemoteInputInjectionService {
             x: frame.minX + CGFloat(message.normalizedX) * frame.width,
             y: frame.minY + CGFloat(message.normalizedY) * frame.height
         )
+    }
+
+    private func pointerClickState(for message: RemoteControlMessage) -> Int64 {
+        Int64(min(max(message.clickCount ?? 1, 1), 2))
     }
 
     private func prepareTargetForPointerDown(_ window: MirrorWindow, at point: CGPoint) {
