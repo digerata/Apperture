@@ -6,7 +6,7 @@ options:
     macOS: "15.0"
 settings:
   base:
-    MARKETING_VERSION: 0.2.4
+    MARKETING_VERSION: 0.3.0
     SWIFT_VERSION: 5.0
     CLANG_ENABLE_MODULES: YES
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -33,7 +33,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: Apple Development
         PRODUCT_NAME: Apperture
-        CURRENT_PROJECT_VERSION: 4
+        CURRENT_PROJECT_VERSION: 5
         INFOPLIST_FILE: Sources/Mac/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MACOSX_DEPLOYMENT_TARGET: "15.0"
@@ -49,7 +49,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.landmk1.apperture
         DEVELOPMENT_TEAM: VY76D5S364
         PRODUCT_NAME: Apperture
-        CURRENT_PROJECT_VERSION: 4
+        CURRENT_PROJECT_VERSION: 5
         INFOPLIST_FILE: Sources/iOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/iOS/AppertureiOS.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: Apperture-AppIcon
