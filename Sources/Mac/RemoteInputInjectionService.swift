@@ -4,7 +4,14 @@ import CoreGraphics
 final class RemoteInputInjectionService {
     private let eventSource = CGEventSource(stateID: .hidSystemState)
     private let focusSettleDelay: TimeInterval = 0.08
+    private let clickPointTolerance: CGFloat = 6
     private var isPointerDown = false
+    private var pointerDownPoint: CGPoint?
+    private var pointerHasDragged = false
+    private var activeClickState: Int64 = 1
+    private var lastClickDate: Date?
+    private var lastClickPoint: CGPoint?
+    private var consecutiveClickCount = 0
 
     func perform(_ message: RemoteControlMessage, in window: MirrorWindow, targetFrame: CGRect?) {
         let currentWindow = refreshedWindow(window)
@@ -13,12 +20,20 @@ final class RemoteInputInjectionService {
         switch message.kind {
         case .pointerDown:
             prepareTargetForPointerDown(currentWindow, at: point)
+            pointerDownPoint = point
+            pointerHasDragged = false
+            activeClickState = nextClickState(at: point)
             isPointerDown = true
-            postMouseEvent(type: .leftMouseDown, at: point, clickState: pointerClickState(for: message))
+            postMouseEvent(type: .leftMouseDown, at: point, clickState: activeClickState)
         case .pointerMove:
+            markPointerDragIfNeeded(to: point)
             postMouseEvent(type: isPointerDown ? .leftMouseDragged : .mouseMoved, at: point, clickState: 0)
         case .pointerUp:
-            postMouseEvent(type: .leftMouseUp, at: point, clickState: pointerClickState(for: message))
+            postMouseEvent(type: .leftMouseUp, at: point, clickState: activeClickState)
+            finishPointerClickIfNeeded(at: point)
+            pointerDownPoint = nil
+            pointerHasDragged = false
+            activeClickState = 1
             isPointerDown = false
         case .scroll:
             prepareTargetForScroll(currentWindow, at: point)
@@ -51,8 +66,39 @@ final class RemoteInputInjectionService {
         )
     }
 
-    private func pointerClickState(for message: RemoteControlMessage) -> Int64 {
-        Int64(min(max(message.clickCount ?? 1, 1), 2))
+    private func nextClickState(at point: CGPoint) -> Int64 {
+        let now = Date()
+        if let lastClickDate,
+           let lastClickPoint,
+           now.timeIntervalSince(lastClickDate) <= NSEvent.doubleClickInterval,
+           distance(from: lastClickPoint, to: point) <= clickPointTolerance {
+            consecutiveClickCount = min(consecutiveClickCount + 1, 2)
+        } else {
+            consecutiveClickCount = 1
+        }
+
+        return Int64(consecutiveClickCount)
+    }
+
+    private func markPointerDragIfNeeded(to point: CGPoint) {
+        guard isPointerDown, !pointerHasDragged, let pointerDownPoint else { return }
+        pointerHasDragged = distance(from: pointerDownPoint, to: point) > clickPointTolerance
+    }
+
+    private func finishPointerClickIfNeeded(at point: CGPoint) {
+        guard !pointerHasDragged else {
+            consecutiveClickCount = 0
+            lastClickDate = nil
+            lastClickPoint = nil
+            return
+        }
+
+        lastClickDate = Date()
+        lastClickPoint = point
+    }
+
+    private func distance(from start: CGPoint, to end: CGPoint) -> CGFloat {
+        hypot(end.x - start.x, end.y - start.y)
     }
 
     private func prepareTargetForPointerDown(_ window: MirrorWindow, at point: CGPoint) {

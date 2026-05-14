@@ -390,8 +390,8 @@ final class iPhoneViewerViewController: UIViewController {
     }
 
     private func configureCallbacks() {
-        mirrorCanvasView.onPointerEvent = { [weak self] kind, point, clickCount in
-            self?.sendPointerEvent(kind: kind, point: point, clickCount: clickCount)
+        mirrorCanvasView.onPointerEvent = { [weak self] kind, point in
+            self?.sendPointerEvent(kind: kind, point: point)
         }
         mirrorCanvasView.onScrollEvent = { [weak self] point, delta, phase in
             self?.sendScrollEvent(point: point, delta: delta, phase: phase)
@@ -860,15 +860,14 @@ final class iPhoneViewerViewController: UIViewController {
         updateFlowOverlays()
     }
 
-    private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint, clickCount: Int = 1) {
+    private func sendPointerEvent(kind: RemoteControlMessage.Kind, point: CGPoint) {
         nextSequenceNumber += 1
         streamClient.send(
             RemoteControlMessage(
                 kind: kind,
                 normalizedX: Double(point.x),
                 normalizedY: Double(point.y),
-                sequenceNumber: nextSequenceNumber,
-                clickCount: clickCount
+                sequenceNumber: nextSequenceNumber
             )
         )
     }
@@ -3150,7 +3149,7 @@ private final class MirrorCanvasView: UIView {
         animateContentArrival()
     }
 
-    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint, Int) -> Void = { _, _, _ in }
+    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
     var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private let scrollView = TwoFingerScrollView()
@@ -3233,8 +3232,8 @@ private final class MirrorCanvasView: UIView {
         imageView.layer.cornerCurve = .continuous
         imageView.isUserInteractionEnabled = false
 
-        pointerSurfaceView.onPointerEvent = { [weak self] kind, point, clickCount in
-            self?.onPointerEvent(kind, point, clickCount)
+        pointerSurfaceView.onPointerEvent = { [weak self] kind, point in
+            self?.onPointerEvent(kind, point)
         }
         pointerSurfaceView.onScrollEvent = { [weak self] point, delta, phase in
             self?.onScrollEvent(point, delta, phase)
@@ -3779,7 +3778,7 @@ private final class VideoRenderView: UIView {
 private final class PointerSurfaceView: UIView {
     var imageFrame: CGRect?
     var usesTouchDragForSingleFingerPan = false
-    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint, Int) -> Void = { _, _, _ in }
+    var onPointerEvent: (RemoteControlMessage.Kind, CGPoint) -> Void = { _, _ in }
     var onScrollEvent: (CGPoint, CGPoint, RemoteControlMessage.ScrollPhase) -> Void = { _, _, _ in }
 
     private enum PointerIntent {
@@ -3838,7 +3837,7 @@ private final class PointerSurfaceView: UIView {
 
         if usesTouchDragForSingleFingerPan {
             pointerIntent = .dragging
-            onPointerEvent(.pointerDown, point, 1)
+            onPointerEvent(.pointerDown, point)
             return
         }
 
@@ -3866,7 +3865,7 @@ private final class PointerSurfaceView: UIView {
             holdDownWorkItem = nil
             if usesTouchDragForSingleFingerPan {
                 let startPoint = initialPointerPoint ?? point
-                onPointerEvent(.pointerDown, startPoint, 1)
+                onPointerEvent(.pointerDown, startPoint)
                 pointerIntent = .dragging
                 fallthrough
             } else {
@@ -3878,7 +3877,7 @@ private final class PointerSurfaceView: UIView {
         case .dragging:
             guard shouldSendMove(to: point) else { return }
             lastPointerPoint = point
-            onPointerEvent(.pointerMove, point, 1)
+            onPointerEvent(.pointerMove, point)
         }
     }
 
@@ -3898,9 +3897,8 @@ private final class PointerSurfaceView: UIView {
             break
         case .pendingTap:
             if let point {
-                let clickCount = min(max(touches.first?.tapCount ?? 1, 1), 2)
-                onPointerEvent(.pointerDown, point, clickCount)
-                onPointerEvent(.pointerUp, point, clickCount)
+                onPointerEvent(.pointerDown, point)
+                onPointerEvent(.pointerUp, point)
             }
         case .scrolling:
             if let point {
@@ -3909,7 +3907,7 @@ private final class PointerSurfaceView: UIView {
             }
         case .dragging:
             if let point {
-                onPointerEvent(.pointerUp, point, 1)
+                onPointerEvent(.pointerUp, point)
             }
         }
 
@@ -3926,7 +3924,7 @@ private final class PointerSurfaceView: UIView {
         stopScrollMomentum()
 
         if case .dragging = pointerIntent, let lastPointerPoint {
-            onPointerEvent(.pointerUp, lastPointerPoint, 1)
+            onPointerEvent(.pointerUp, lastPointerPoint)
         }
 
         if case .scrolling = pointerIntent, hasSentScrollBegin, let lastScrollPoint {
@@ -3944,7 +3942,7 @@ private final class PointerSurfaceView: UIView {
         holdDownWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, case .pendingTap = self.pointerIntent else { return }
-            self.onPointerEvent(.pointerDown, point, 1)
+            self.onPointerEvent(.pointerDown, point)
             self.pointerIntent = .dragging
         }
         holdDownWorkItem = workItem
