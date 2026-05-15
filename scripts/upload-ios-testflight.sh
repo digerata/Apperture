@@ -12,6 +12,7 @@ BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/build/ios-testflight}"
 ARCHIVE_PATH="$BUILD_ROOT/$PRODUCT_NAME.xcarchive"
 EXPORT_PATH="$BUILD_ROOT/export"
 EXPORT_OPTIONS_PATH="$BUILD_ROOT/ExportOptions.plist"
+UPLOAD_LOG_PATH="$BUILD_ROOT/upload.log"
 API_KEY_DIR="$HOME/.appstoreconnect/private_keys"
 PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
 IOS_PROFILE_SPECIFIER="${IOS_PROVISIONING_PROFILE_SPECIFIER:-}"
@@ -164,11 +165,20 @@ if [[ -z "$IPA_PATH" ]]; then
 fi
 
 echo "Uploading IPA to App Store Connect..."
+set +e
 xcrun altool --upload-app \
   --type ios \
   --file "$IPA_PATH" \
   --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
-  --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+  --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID" \
+  2>&1 | tee "$UPLOAD_LOG_PATH"
+upload_status=${PIPESTATUS[0]}
+set -e
+
+if [[ "$upload_status" -ne 0 ]] || grep -Eiq "UPLOAD FAILED|Failed to upload package|Validation failed|STATE_ERROR|ERROR:" "$UPLOAD_LOG_PATH"; then
+  echo "error: App Store Connect upload failed. See log above." >&2
+  exit 1
+fi
 
 echo "Uploaded TestFlight build:"
 echo "$IPA_PATH"
