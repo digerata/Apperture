@@ -1,61 +1,61 @@
 {
   "images" : [
     {
-      "filename" : "Apperture-AppIcon-16.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 9.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "16x16"
     },
     {
-      "filename" : "Apperture-AppIcon-16@2x.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 8.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "16x16"
     },
     {
-      "filename" : "Apperture-AppIcon-32.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 7.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "32x32"
     },
     {
-      "filename" : "Apperture-AppIcon-32@2x.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 6.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "32x32"
     },
     {
-      "filename" : "Apperture-AppIcon-128.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 5.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "128x128"
     },
     {
-      "filename" : "Apperture-AppIcon-128@2x.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 4.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "128x128"
     },
     {
-      "filename" : "Apperture-AppIcon-256.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 3.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "256x256"
     },
     {
-      "filename" : "Apperture-AppIcon-256@2x.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 2.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "256x256"
     },
     {
-      "filename" : "Apperture-AppIcon-512.png",
+      "filename" : "App-iOS-Default-1024x1024@1x 1.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "512x512"
     },
     {
-      "filename" : "Apperture-AppIcon-1024.png",
+      "filename" : "App-iOS-Default-1024x1024@1x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "512x512"
