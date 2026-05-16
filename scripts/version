@@ -62,12 +62,22 @@ def bump_marketing(kind)
   puts "Marketing version: #{old} -> #{new_version}"
 end
 
-def target_block_range(lines, target)
-  start_index = lines.index { |line| line == "  #{target}:\n" }
+def targets_block_range(lines)
+  start_index = lines.index { |line| line == "targets:\n" }
   usage! unless start_index
 
-  end_index = lines[(start_index + 1)..].find_index { |line| line.match?(/^  [A-Za-z0-9_]+:\s*$/) }
+  end_index = lines[(start_index + 1)..].find_index { |line| line.match?(/^[A-Za-z0-9_]+:\s*$/) }
   end_index = end_index ? start_index + 1 + end_index : lines.length
+  (start_index + 1)...end_index
+end
+
+def target_block_range(lines, target)
+  targets_range = targets_block_range(lines)
+  start_index = targets_range.find { |index| lines[index] == "  #{target}:\n" }
+  usage! unless start_index
+
+  end_index = ((start_index + 1)...targets_range.end).find { |index| lines[index].match?(/^  [A-Za-z0-9_]+:\s*$/) }
+  end_index ||= targets_range.end
   start_index...end_index
 end
 

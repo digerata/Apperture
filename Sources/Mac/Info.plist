@@ -30,6 +30,10 @@
 	<string>Apperture reads your desktop picture so mirrored windows can appear over the same background on your iPhone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Apperture publishes a private local stream for your paired iPhone.</string>
+	<key>PostHogHost</key>
+	<string>$(POSTHOG_HOST)</string>
+	<key>PostHogProjectToken</key>
+	<string>$(POSTHOG_PROJECT_TOKEN)</string>
 	<key>SUAutomaticallyUpdate</key>
 	<true/>
 	<key>SUEnableInstallerLauncherService</key>

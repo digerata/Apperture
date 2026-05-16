@@ -7,11 +7,25 @@ enum PostHogEnv: String {
     case projectToken = "POSTHOG_PROJECT_TOKEN"
     case host = "POSTHOG_HOST"
 
-    var value: String {
-        guard let value = ProcessInfo.processInfo.environment[rawValue] else {
-            fatalError("Set \(rawValue) in the Xcode scheme's Run environment variables.")
+    var infoDictionaryKey: String {
+        switch self {
+        case .projectToken:
+            return "PostHogProjectToken"
+        case .host:
+            return "PostHogHost"
         }
-        return value
+    }
+
+    var value: String {
+        if let environmentValue = ProcessInfo.processInfo.environment[rawValue], !environmentValue.isEmpty {
+            return environmentValue
+        }
+
+        if let bundledValue = Bundle.main.object(forInfoDictionaryKey: infoDictionaryKey) as? String, !bundledValue.isEmpty {
+            return bundledValue
+        }
+
+        fatalError("Set \(rawValue) in the environment or \(infoDictionaryKey) in Info.plist.")
     }
 }
 
@@ -280,7 +294,7 @@ final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configurePostHog() {
-        let config = PostHogConfig(apiKey: PostHogEnv.projectToken.value, host: PostHogEnv.host.value)
+        let config = PostHogConfig(projectToken: PostHogEnv.projectToken.value, host: PostHogEnv.host.value)
         config.captureApplicationLifecycleEvents = true
         PostHogSDK.shared.setup(config)
     }

@@ -1,6 +1,32 @@
 import UIKit
 import PostHog
 
+private enum PostHogConfigValue: String {
+    case projectToken = "POSTHOG_PROJECT_TOKEN"
+    case host = "POSTHOG_HOST"
+
+    var infoDictionaryKey: String {
+        switch self {
+        case .projectToken:
+            return "PostHogProjectToken"
+        case .host:
+            return "PostHogHost"
+        }
+    }
+
+    var value: String {
+        if let environmentValue = ProcessInfo.processInfo.environment[rawValue], !environmentValue.isEmpty {
+            return environmentValue
+        }
+
+        if let bundledValue = Bundle.main.object(forInfoDictionaryKey: infoDictionaryKey) as? String, !bundledValue.isEmpty {
+            return bundledValue
+        }
+
+        fatalError("Set \(rawValue) in the environment or \(infoDictionaryKey) in Info.plist.")
+    }
+}
+
 @main
 final class AppertureiOSApp: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
@@ -19,11 +45,10 @@ final class AppertureiOSApp: UIResponder, UIApplicationDelegate {
     }
 
     private func configurePostHog() {
-        guard let token = ProcessInfo.processInfo.environment["POSTHOG_PROJECT_TOKEN"],
-              let host = ProcessInfo.processInfo.environment["POSTHOG_HOST"] else {
-            fatalError("Set POSTHOG_PROJECT_TOKEN and POSTHOG_HOST in the Xcode scheme's Run environment variables.")
-        }
-        let config = PostHogConfig(apiKey: token, host: host)
+        let config = PostHogConfig(
+            projectToken: PostHogConfigValue.projectToken.value,
+            host: PostHogConfigValue.host.value
+        )
         config.captureApplicationLifecycleEvents = true
         PostHogSDK.shared.setup(config)
     }

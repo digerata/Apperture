@@ -28,6 +28,10 @@
 	<string>Apperture connects to your Mac host on your private network.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Apperture uses the camera to scan pairing codes shown by your Mac.</string>
+	<key>PostHogHost</key>
+	<string>$(POSTHOG_HOST)</string>
+	<key>PostHogProjectToken</key>
+	<string>$(POSTHOG_PROJECT_TOKEN)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

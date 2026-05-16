@@ -12,6 +12,8 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     SPARKLE_FEED_URL: https://runapperture.com/releases/appcast.xml
     SPARKLE_PUBLIC_ED_KEY: D/FhR/NzyAxCqIHM/cdEYAdMyn1G8pulIwPP5fQv7Dg=
+    POSTHOG_PROJECT_TOKEN: "phc_xq6ZuchvXVqB5oe2LPpAYmzryAQY7bQUHi9NZGFYt7Hv"
+    POSTHOG_HOST: "https://us.i.posthog.com"
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
@@ -19,6 +21,31 @@ packages:
   PostHog:
     url: https://github.com/PostHog/posthog-ios
     from: 3.58.3
+schemes:
+  AppertureMac:
+    build:
+      targets:
+        AppertureMac: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  AppertureiOS:
+    build:
+      targets:
+        AppertureiOS: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
 targets:
   AppertureMac:
     type: application
