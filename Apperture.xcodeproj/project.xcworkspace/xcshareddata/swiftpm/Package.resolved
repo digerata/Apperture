@@ -1,15 +1,6 @@
 {
-  "originHash" : "a41aebe9ff4daa704a4ff1a2fbfaff004ac2123ee6e7b02c67aff3b0f24ebfbd",
+  "originHash" : "e721da7f9826abdffcb6185e886155efa2514bd6234475f1afa893e29eb258d6",
   "pins" : [
-    {
-      "identity" : "posthog-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/PostHog/posthog-ios",
-      "state" : {
-        "revision" : "cf6155963a6532c7b88e0cfa2b1d07595d6b6db6",
-        "version" : "3.58.3"
-      }
-    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",
