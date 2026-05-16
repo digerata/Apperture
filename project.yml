@@ -16,6 +16,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.8.1
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios
+    from: 3.58.3
 targets:
   AppertureMac:
     type: application
@@ -26,6 +29,8 @@ targets:
     dependencies:
       - package: Sparkle
         product: Sparkle
+      - package: PostHog
+        product: PostHog
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.landmk1.apperture
@@ -44,6 +49,9 @@ targets:
     sources:
       - path: Sources/Shared
       - path: Sources/iOS
+    dependencies:
+      - package: PostHog
+        product: PostHog
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.landmk1.apperture
