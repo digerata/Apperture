@@ -1,4 +1,5 @@
 import Foundation
+import PostHog
 import UIKit
 
 @MainActor
@@ -35,6 +36,10 @@ final class IOSPairingManager: ObservableObject {
 
         pendingOffer = offer
         lastPairingError = nil
+        // PostHog: Track pairing initiation from QR scan
+        PostHogSDK.shared.capture("ios_pairing_initiated", properties: [
+            "mac_name": offer.macDisplayName,
+        ])
         return PairingRequest(offer: offer, phoneIdentity: localIdentity)
     }
 
@@ -56,6 +61,10 @@ final class IOSPairingManager: ObservableObject {
         pairedMacs = pairedDeviceStore.load()
         pendingOffer = nil
         lastPairingError = nil
+        // PostHog: Track successful pairing acceptance
+        PostHogSDK.shared.capture("ios_pairing_accepted", properties: [
+            "mac_name": macDevice.displayName,
+        ])
     }
 
     func reject(_ message: String?) {
@@ -66,6 +75,10 @@ final class IOSPairingManager: ObservableObject {
     func forget(_ device: PairedDevice) {
         pairedDeviceStore.revoke(device.id)
         pairedMacs = pairedDeviceStore.load()
+        // PostHog: Track device forgotten
+        PostHogSDK.shared.capture("ios_device_forgotten", properties: [
+            "mac_name": device.displayName,
+        ])
     }
 
     func authRequest(for device: PairedDevice) -> PairingAuthRequest {

@@ -18,3 +18,4 @@ xcuserdata/
 Secrets.swift
 secrets.xcconfig
 
+.env.local

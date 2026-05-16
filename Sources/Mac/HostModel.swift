@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import PostHog
 import SwiftUI
 
 @MainActor
@@ -154,6 +155,8 @@ final class HostModel: ObservableObject {
     }
 
     func requestScreenCaptureAccess() {
+        // PostHog: Track screen recording permission request
+        PostHogSDK.shared.capture("screen_recording_permission_requested")
         _ = CGRequestScreenCaptureAccess()
         refreshPermissions()
     }
@@ -272,6 +275,8 @@ final class HostModel: ObservableObject {
             endpointHints: endpointHints,
             port: RemoteFrameStreamConfiguration.tcpPort
         )
+        // PostHog: Track pairing code creation
+        PostHogSDK.shared.capture("pairing_code_created")
     }
 
     func cancelPhonePairing() {
@@ -284,17 +289,30 @@ final class HostModel: ObservableObject {
               let connectionID = pendingPairingConnectionID else { return }
         pendingPairingConnectionID = nil
         frameServer.completePairing(connectionID: connectionID, response: response)
+        // PostHog: Track pairing approval
+        PostHogSDK.shared.capture("pairing_approved", properties: [
+            "device_name": pairingManager.pairedDevices.last?.displayName ?? "unknown",
+        ])
     }
 
     func rejectPendingPairing() {
+        let deviceName = pairingManager.pendingRequest?.request.phoneIdentity.displayName ?? "unknown"
         guard let response = pairingManager.rejectPendingRequest(),
               let connectionID = pendingPairingConnectionID else { return }
         pendingPairingConnectionID = nil
         frameServer.completePairing(connectionID: connectionID, response: response)
+        // PostHog: Track pairing rejection
+        PostHogSDK.shared.capture("pairing_rejected", properties: [
+            "device_name": deviceName,
+        ])
     }
 
     func revokePairing(_ device: PairedDevice) {
         pairingManager.revoke(device)
+        // PostHog: Track device revocation
+        PostHogSDK.shared.capture("pairing_revoked", properties: [
+            "device_name": device.displayName,
+        ])
     }
 
     private func openSystemSettings(anchor: String) {
@@ -476,6 +494,12 @@ final class HostModel: ObservableObject {
                         tint: .systemBlue
                     )
                 )
+                // PostHog: Track mirroring started
+                PostHogSDK.shared.capture("mirroring_started", properties: [
+                    "application_name": applicationName,
+                    "capture_mode": selectedWindow?.isLikelySimulator == true ? "simulator" : "window",
+                    "connected_clients": connectedClients.count,
+                ])
             }
             return
         }
@@ -489,6 +513,17 @@ final class HostModel: ObservableObject {
                 tint: .systemGray
             )
         )
+        // PostHog: Track mirroring stopped or failed
+        if case .failed(let reason) = newStatus {
+            PostHogSDK.shared.capture("mirroring_failed", properties: [
+                "application_name": applicationName,
+                "reason": reason,
+            ])
+        } else {
+            PostHogSDK.shared.capture("mirroring_stopped", properties: [
+                "application_name": applicationName,
+            ])
+        }
     }
 
     private func handleConnectedClientsChange(from oldClients: [ConnectedFrameClient], to newClients: [ConnectedFrameClient]) {
@@ -505,6 +540,10 @@ final class HostModel: ObservableObject {
                     tint: .systemGreen
                 )
             )
+            // PostHog: Track client connection
+            PostHogSDK.shared.capture("client_connected", properties: [
+                "client_name": client.displayName,
+            ])
         }
 
         for client in disconnectedClients {
@@ -515,6 +554,10 @@ final class HostModel: ObservableObject {
                     tint: .systemOrange
                 )
             )
+            // PostHog: Track client disconnection
+            PostHogSDK.shared.capture("client_disconnected", properties: [
+                "client_name": client.displayName,
+            ])
         }
     }
 

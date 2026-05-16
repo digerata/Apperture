@@ -45,6 +45,8 @@
 		DABCACF858D6651EC0C8E411 /* MirrorSessionSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */; };
 		E00CE58127D97834B26BDEB3 /* RemoteWindowListMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29AC8D22A310B40B327DDC1A /* RemoteWindowListMessage.swift */; };
 		E246B131F12DD309857BD848 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 2AAB0FD4D21BFAF6589D31B5 /* Sparkle */; };
+		BB00000000000000000004AB /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = BB00000000000000000002AB /* PostHog */; };
+		BB00000000000000000005AB /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = BB00000000000000000003AB /* PostHog */; };
 		EA78FB9F85478EE0DF97B820 /* DeveloperActivityEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39E10B94A9DA1EDC36778199 /* DeveloperActivityEvent.swift */; };
 		EC29B8260AF745E27852E070 /* RemoteFrameStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5270BEDE579F5EF944EAA7 /* RemoteFrameStreamConfiguration.swift */; };
 		F2C005D75782C5D523490314 /* MirrorSessionSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8572B3CBD1AFD98F8DD5B68B /* MirrorSessionSnapshot.swift */; };
@@ -99,6 +101,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				E246B131F12DD309857BD848 /* Sparkle in Frameworks */,
+				BB00000000000000000004AB /* PostHog in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB00000000000000000006AB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB00000000000000000005AB /* PostHog in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -201,6 +212,7 @@
 			name = AppertureMac;
 			packageProductDependencies = (
 				2AAB0FD4D21BFAF6589D31B5 /* Sparkle */,
+				BB00000000000000000002AB /* PostHog */,
 			);
 			productName = AppertureMac;
 			productReference = 0B6711FED776A49487016D25 /* AppertureMac.app */;
@@ -212,12 +224,16 @@
 			buildPhases = (
 				166577E3593751DD601FF691 /* Sources */,
 				DC140C6E1504F9A1561D6059 /* Resources */,
+				BB00000000000000000006AB /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = AppertureiOS;
+			packageProductDependencies = (
+				BB00000000000000000003AB /* PostHog */,
+			);
 			productName = AppertureiOS;
 			productReference = 12FEF13A3B652BE2B76966DC /* AppertureiOS.app */;
 			productType = "com.apple.product-type.application";
@@ -251,6 +267,7 @@
 			mainGroup = C3C857E9638C2E26E0AB9A01;
 			packageReferences = (
 				AAECA2A31637767D8C8E76FB /* XCRemoteSwiftPackageReference "Sparkle" */,
+				BB00000000000000000001AB /* XCRemoteSwiftPackageReference "posthog-ios" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
@@ -593,6 +610,14 @@
 				minimumVersion = 2.8.1;
 			};
 		};
+		BB00000000000000000001AB /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/PostHog/posthog-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.58.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -600,6 +625,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AAECA2A31637767D8C8E76FB /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		BB00000000000000000002AB /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB00000000000000000001AB /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
+		};
+		BB00000000000000000003AB /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB00000000000000000001AB /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,6 +1,19 @@
 import SwiftUI
 import AppKit
 import Sparkle
+import PostHog
+
+enum PostHogEnv: String {
+    case projectToken = "POSTHOG_PROJECT_TOKEN"
+    case host = "POSTHOG_HOST"
+
+    var value: String {
+        guard let value = ProcessInfo.processInfo.environment[rawValue] else {
+            fatalError("Set \(rawValue) in the Xcode scheme's Run environment variables.")
+        }
+        return value
+    }
+}
 
 @main
 struct AppertureMacApp: App {
@@ -233,6 +246,7 @@ final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         configureSoftwareUpdates()
+        configurePostHog()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -263,6 +277,12 @@ final class AppertureAppDelegate: NSObject, NSApplicationDelegate {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+    }
+
+    private func configurePostHog() {
+        let config = PostHogConfig(apiKey: PostHogEnv.projectToken.value, host: PostHogEnv.host.value)
+        config.captureApplicationLifecycleEvents = true
+        PostHogSDK.shared.setup(config)
     }
 }
 
